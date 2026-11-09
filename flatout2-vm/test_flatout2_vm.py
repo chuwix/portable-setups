@@ -17,6 +17,11 @@ SPEC.loader.exec_module(vm)
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_shell_fallback_prefers_installed_windows(self) -> None:
+        self.assertLess(vm.STARTUP_NSH.index("bootmgfw.efi"), vm.STARTUP_NSH.index("cdboot_noprompt.efi"))
+        self.assertNotIn("setup.exe", vm.STARTUP_NSH)
+        self.assertIn("run (0 9)", vm.STARTUP_NSH)
+
     def setUp(self) -> None:
         self.config = vm.configuration("f28a7d62-4bdd-47af-86fe-e60e96edca44")
 
@@ -102,6 +107,30 @@ class UnattendedTests(unittest.TestCase):
 
 
 class PrerequisiteTests(unittest.TestCase):
+    def test_retry_refuses_partitioned_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            bundle = destination / f"{vm.NAME}.utm"
+            data = bundle / "Data"
+            data.mkdir(parents=True)
+            (bundle / "config.plist").write_bytes(plistlib.dumps(vm.configuration(str(vm.uuid.uuid4()))))
+            (data / "system.raw").write_bytes(b"partitioned" + bytes(1024 * 1024))
+            with patch.object(vm, "run", return_value="stopped"), patch.object(vm, "write_seed") as write:
+                with self.assertRaisesRegex(ValueError, "no longer blank"):
+                    vm.refresh_seed(destination)
+                write.assert_not_called()
+
+    def test_retry_refuses_running_vm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            bundle = destination / f"{vm.NAME}.utm"
+            bundle.mkdir()
+            (bundle / "config.plist").write_bytes(plistlib.dumps(vm.configuration(str(vm.uuid.uuid4()))))
+            with patch.object(vm, "run", return_value="started"), patch.object(vm, "write_seed") as write:
+                with self.assertRaisesRegex(ValueError, "Shut down"):
+                    vm.refresh_seed(destination)
+                write.assert_not_called()
+
     def test_declining_license_does_not_download(self) -> None:
         args = argparse.Namespace(accept_windows_license=False)
         with patch.object(vm, "check_host"), patch.object(vm.sys.stdin, "isatty", return_value=True), \

@@ -29,6 +29,20 @@ WINDOWS_URL = (
 )
 WINDOWS_SHA256 = "32cde0071ed8086b29bb6c8c3bf17ba9e3cdf43200537434a811a9b6cc2711a1"
 DEFAULT_CACHE = Path.home() / "Library/Caches/portable-setups/flatout2-vm"
+STARTUP_NSH = """@echo -off
+map -r
+for %i run (0 9)
+  if exist fs%i:\\EFI\\Microsoft\\Boot\\bootmgfw.efi then
+    fs%i:\\EFI\\Microsoft\\Boot\\bootmgfw.efi
+  endif
+endfor
+for %i run (0 9)
+  if exist fs%i:\\efi\\microsoft\\boot\\cdboot_noprompt.efi then
+    fs%i:\\efi\\microsoft\\boot\\cdboot_noprompt.efi
+  endif
+endfor
+echo No Windows boot manager found. Check the Windows installation media.
+"""
 NS = "urn:schemas-microsoft-com:unattend"
 ET.register_namespace("", NS)
 ET.register_namespace("wcm", "http://schemas.microsoft.com/WMIConfig/2002/State")
@@ -252,6 +266,48 @@ def audit(config: dict[str, Any]) -> None:
         raise ValueError("Shared networking must enable host isolation.")
 
 
+def refresh_seed(destination: Path) -> None:
+    """Refresh installer media only for a stopped VM whose disk is unpartitioned."""
+    bundle = destination / f"{NAME}.utm"
+    if destination.is_symlink() or any(p.is_symlink() for p in destination.rglob("*")):
+        raise ValueError("Refusing setup state containing symlinks.")
+    with (bundle / "config.plist").open("rb") as source:
+        config = plistlib.load(source)
+    audit(config)
+    vm_id = str(uuid.UUID(config["Information"]["UUID"]))
+    status = run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id])
+    if status != "stopped":
+        raise ValueError("Shut down the VM before retrying setup; its disk will not be changed.")
+    data = bundle / "Data"
+    with (data / "system.raw").open("rb") as disk:
+        header = disk.read(1024 * 1024)
+    if len(header) != 1024 * 1024 or any(header):
+        raise ValueError("Guest disk is no longer blank. Refusing to reattach an unattended installer that could erase it.")
+    seed = destination / "seed"
+    if not (seed / "Autounattend.xml").is_file():
+        raise ValueError("Original unattended file is missing; refusing to regenerate accounts.")
+    write_seed(seed, data)
+    start_setup_vm(bundle, vm_id)
+
+
+def write_seed(seed: Path, data: Path) -> None:
+    (seed / "startup.nsh").write_bytes(STARTUP_NSH.replace("\n", "\r\n").encode("ascii"))
+    shutil.copyfile(Path(__file__).with_name("guest-setup.ps1"), seed / "guest-setup.ps1")
+    temporary = data / f"seed-{uuid.uuid4()}.iso"
+    try:
+        run(["/usr/bin/hdiutil", "makehybrid", "-iso", "-joliet", "-default-volume-name",
+             "FLATOUTSETUP", "-o", str(temporary), str(seed)])
+        os.replace(temporary, data / "seed.iso")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def start_setup_vm(bundle: Path, vm_id: str) -> None:
+    run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
+    run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
+    print("VM started. Firmware fallback should launch Windows Setup; report a Shell> prompt if it does not.")
+
+
 def setup(args: argparse.Namespace) -> None:
     check_host()
     if not args.accept_windows_license:
@@ -269,7 +325,8 @@ def setup(args: argparse.Namespace) -> None:
         raise ValueError(f"UTM Secure Boot template is missing: {firmware}")
     destination = args.home.expanduser().resolve()
     if destination.exists():
-        raise ValueError(f"Refusing to overwrite existing state in {destination}")
+        refresh_seed(destination)
+        return
     iso = acquire_iso(args)
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
     bundle = destination / f"{NAME}.utm"
@@ -290,13 +347,10 @@ def setup(args: argparse.Namespace) -> None:
     seed = destination / "seed"
     seed.mkdir(mode=0o700)
     (seed / "Autounattend.xml").write_bytes(unattended(admin, player))
-    shutil.copyfile(Path(__file__).with_name("guest-setup.ps1"), seed / "guest-setup.ps1")
-    run(["/usr/bin/hdiutil", "makehybrid", "-iso", "-joliet", "-default-volume-name",
-         "FLATOUTSETUP", "-o", str(data / "seed.iso"), str(seed)])
+    write_seed(seed, data)
     (destination / "vm-id").write_text(vm_id + "\n")
-    run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
     print(f"VM prepared: {bundle}\nCredentials: {destination / 'credentials.json'}")
-    print("Start it in UTM and press a key at the Windows boot prompt. See README.md for remaining steps.")
+    start_setup_vm(bundle, vm_id)
 
 
 def main() -> None:

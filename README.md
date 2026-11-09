@@ -19,7 +19,7 @@ one-click setup. Check the project's status before using it.
 ### Test the FlatOut 2 prototype
 
 The prototype currently lives on the `feat/flatout2-vm` branch, not `main`.
-On an Apple Silicon Mac with UTM 5.0.8+ and Python 3.11+ installed:
+On an Apple Silicon Mac with Terminal, Homebrew, and Git available:
 
 ```sh
 git clone --branch feat/flatout2-vm --single-branch https://github.com/chuwix/portable-setups.git
@@ -30,7 +30,9 @@ cd portable-setups
 Alternatively, select that branch on GitHub, download its source ZIP, extract it, and open
 `flatout2-vm/setup-flatout2.command`. macOS may require permission to open downloaded scripts.
 Read [the project's prerequisites and limitations](flatout2-vm/) first. The launcher asks for
-Windows license acceptance, then downloads its pinned ISO. No ISO path or checksum entry is needed.
+Windows license acceptance, then downloads its pinned ISO. Before that it installs missing UTM
+and Python through Homebrew, or upgrades an outdated Homebrew-managed UTM. Nix-managed Homebrew
+is left unchanged. No ISO path or checksum entry is needed.
 
 Do not upload Windows images, purchased game files, populated virtual machines, credentials,
 license keys, or personal configuration. Scripts must not execute a game installer on the host

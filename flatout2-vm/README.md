@@ -40,19 +40,19 @@ Keep UTM and Windows updated, leave Defender enabled, and play as **Player**, no
 ## Prerequisites
 
 - Apple Silicon Mac with macOS 13+, preferably at least 16 GiB RAM and 100 GiB free disk space.
-- UTM **5.0.8+**, Python **3.11+**, and a valid Windows 11 Pro license.
+- Terminal and Homebrew. Setup installs missing Python **3.11+** and UTM **5.0.8+** through brew.
+- A valid Windows 11 Pro license.
 - Internet access for the pinned Microsoft Windows ISO, or a local ARM64 ISO override.
 - Your own FlatOut 2 purchase on GOG or Steam. Use the same edition/version for all LAN players.
 
-For an **unmanaged** Mac with Homebrew:
+The setup launcher checks prerequisites and installs missing tools through Homebrew. It upgrades
+an outdated UTM if Homebrew manages it; an outdated unmanaged UTM may require manual resolution
+if Homebrew refuses to adopt it. Homebrew may request macOS authorization. Never run setup as sudo.
+The Play launcher does not install anything.
 
-```sh
-brew install --cask utm
-brew install python
-```
-
-If UTM is already installed, use `brew upgrade --cask utm`. On a declaratively managed Mac,
-update through its manager instead. These scripts never install or upgrade host software.
+Nix-managed Homebrew is detected and never modified. On such machines, satisfy prerequisites
+through your manager, then run the same launcher. With supported tools already installed,
+setup performs no brew installation or upgrade. Direct Python invocation skips this bootstrap.
 
 ### Pinned Windows media
 
@@ -104,13 +104,23 @@ or the generated installation answer file must be adapted. A custom URL is an ex
 decision, not an endorsement of that source.
 
 Default state directory: `~/Library/Application Support/FlatOut2VM/`.
-The setup refuses to overwrite existing state. For a separate attempt use `--home '/another/path'`
+The setup never recreates an existing guest disk. A retry refreshes seed media only when UTM
+reports the VM stopped and the first MiB of its raw guest disk is still zero-filled. Any
+partitioned disk is refused because the unattended installer wipes guest disk 0. This is a
+recovery check for this prototype, not a general disk-content classifier.
+For a separate attempt use `--home '/another/path'`
 on every command. Paths can contain spaces; no repository or username is hardcoded.
 
-UTM opens the generated VM. macOS may ask for permission. Start the VM, press a key at the
-Windows boot prompt, and allow Windows Setup to use the answer file. Locale, image selection,
+UTM opens and starts the generated VM. macOS may ask for permission. The firmware fallback
+attempts to start Windows Setup without a keypress. Locale, image selection,
 disk partitioning, and account creation are preconfigured. Current Windows builds may still
 show OOBE/license/account screens. Do not bypass security checks to suppress them.
+
+The seed media now includes a `startup.nsh` fallback for the UEFI shell. It searches mapped
+filesystems for an installed Windows boot manager first, then Microsoft's no-prompt CD loader.
+Automatic discovery of this script by the firmware is not yet verified. If it remains at
+`Shell>`, that is a failed boot test, not a Windows or PowerShell script failure. Do not format
+anything or recreate the VM to troubleshoot it; preserve the state for diagnosis.
 
 Use the generated `credentials.json` to sign into VMAdmin for initial setup. An interrupted
 attempt is retained for diagnosis; it is not silently deleted or overwritten.
