@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import plistlib
+import struct
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -17,11 +18,6 @@ SPEC.loader.exec_module(vm)
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_shell_fallback_prefers_installed_windows(self) -> None:
-        self.assertLess(vm.STARTUP_NSH.index("bootmgfw.efi"), vm.STARTUP_NSH.index("cdboot_noprompt.efi"))
-        self.assertNotIn("setup.exe", vm.STARTUP_NSH)
-        self.assertIn("run (0 9)", vm.STARTUP_NSH)
-
     def setUp(self) -> None:
         self.config = vm.configuration("f28a7d62-4bdd-47af-86fe-e60e96edca44")
 
@@ -81,6 +77,67 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotEqual(self.config["Network"][0]["MacAddress"], other["Network"][0]["MacAddress"])
         identifiers = [d["Identifier"] for d in self.config["Drive"]]
         self.assertEqual(len(identifiers), len(set(identifiers)))
+
+
+class BootMediaTests(unittest.TestCase):
+    def fixture(self) -> tuple[bytearray, bytes, bytes]:
+        image = bytearray(100 * 2048)
+        image[16 * 2048:16 * 2048 + 7] = b"\x00CD001\x01"
+        image[16 * 2048 + 7:16 * 2048 + 30] = b"EL TORITO SPECIFICATION"
+        struct.pack_into("<I", image, 16 * 2048 + 71, 22)
+        image[17 * 2048:17 * 2048 + 7] = b"\xffCD001\x01"
+        catalog = bytearray(2048)
+        catalog[:2] = b"\x01\xef"
+        catalog[30:32] = b"\x55\xaa"
+        struct.pack_into("<H", catalog, 28, -sum(struct.unpack("<16H", catalog[:32])) % 65536)
+        catalog[32] = 0x88
+        struct.pack_into("<H", catalog, 38, 4)
+        struct.pack_into("<I", catalog, 40, 90)
+        image[22 * 2048:23 * 2048] = catalog
+        prompt, noprompt = b"p" * 2048, b"n" * 2048
+        image[90 * 2048:91 * 2048] = prompt
+        return image, prompt, noprompt
+
+    def test_only_default_boot_image_changes(self) -> None:
+        image, prompt, noprompt = self.fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            iso = Path(directory) / "windows.iso"
+            iso.write_bytes(image)
+            with patch.object(vm, "EFI_PROMPT_SHA256", hashlib.sha256(prompt).hexdigest()), \
+                    patch.object(vm, "EFI_NOPROMPT_SHA256", hashlib.sha256(noprompt).hexdigest()):
+                vm.patch_boot_image(iso, prompt, noprompt)
+                vm.patch_boot_image(iso, prompt, noprompt)
+            image[90 * 2048:91 * 2048] = noprompt
+            self.assertEqual(iso.read_bytes(), image)
+
+    def test_unexpected_media_is_never_modified(self) -> None:
+        for mutation in ("hash", "catalog", "image", "size", "platform", "descriptor"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                image, prompt, noprompt = self.fixture()
+                if mutation == "catalog":
+                    image[22 * 2048 + 30] = 0
+                elif mutation == "image":
+                    image[90 * 2048] = 0
+                elif mutation == "size":
+                    image[22 * 2048 + 38] = 0
+                elif mutation == "platform":
+                    image[22 * 2048 + 1] = 0
+                elif mutation == "descriptor":
+                    image[16 * 2048 + 1] = 0
+                iso = Path(directory) / "windows.iso"
+                iso.write_bytes(image)
+                with patch.object(vm, "EFI_PROMPT_SHA256", "0" * 64 if mutation == "hash" else hashlib.sha256(prompt).hexdigest()), \
+                        patch.object(vm, "EFI_NOPROMPT_SHA256", hashlib.sha256(noprompt).hexdigest()):
+                    with self.assertRaises(ValueError):
+                        vm.patch_boot_image(iso, prompt, noprompt)
+                self.assertEqual(iso.read_bytes(), image)
+
+    def test_mount_is_detached_when_boot_images_are_missing(self) -> None:
+        with patch.object(vm, "run") as run:
+            with self.assertRaises(FileNotFoundError):
+                vm.prepare_windows_media(Path("missing.iso"))
+        self.assertEqual(run.call_args_list[0].args[0][1], "attach")
+        self.assertEqual(run.call_args_list[-1].args[0][1], "detach")
 
 
 class UnattendedTests(unittest.TestCase):

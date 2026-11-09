@@ -13,6 +13,8 @@ import secrets
 import shutil
 import subprocess
 import sys
+import struct
+import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -29,20 +31,8 @@ WINDOWS_URL = (
 )
 WINDOWS_SHA256 = "32cde0071ed8086b29bb6c8c3bf17ba9e3cdf43200537434a811a9b6cc2711a1"
 DEFAULT_CACHE = Path.home() / "Library/Caches/portable-setups/flatout2-vm"
-STARTUP_NSH = """@echo -off
-map -r
-for %i run (0 9)
-  if exist fs%i:\\EFI\\Microsoft\\Boot\\bootmgfw.efi then
-    fs%i:\\EFI\\Microsoft\\Boot\\bootmgfw.efi
-  endif
-endfor
-for %i run (0 9)
-  if exist fs%i:\\efi\\microsoft\\boot\\cdboot_noprompt.efi then
-    fs%i:\\efi\\microsoft\\boot\\cdboot_noprompt.efi
-  endif
-endfor
-echo No Windows boot manager found. Check the Windows installation media.
-"""
+EFI_PROMPT_SHA256 = "0be1d959458b3a83ba84c7f58b1f4d0ca080abccecd53eae157c8d2f9bff2f98"
+EFI_NOPROMPT_SHA256 = "70eedc9e6a37f7ac688ed9b3eefe48ec26156e48cda669e520ccaad44130d113"
 NS = "urn:schemas-microsoft-com:unattend"
 ET.register_namespace("", NS)
 ET.register_namespace("wcm", "http://schemas.microsoft.com/WMIConfig/2002/State")
@@ -108,6 +98,70 @@ def acquire_iso(args: argparse.Namespace) -> Path:
     finally:
         partial.unlink(missing_ok=True)
     return iso
+
+
+def patch_boot_image(iso: Path, prompt: bytes, noprompt: bytes) -> None:
+    """Replace only the validated default EFI image, never the cached source ISO."""
+    if (hashlib.sha256(prompt).hexdigest() != EFI_PROMPT_SHA256
+            or hashlib.sha256(noprompt).hexdigest() != EFI_NOPROMPT_SHA256
+            or len(prompt) != len(noprompt)):
+        raise ValueError("Unrecognized Microsoft EFI images; refusing to modify installation media.")
+    with iso.open("r+b") as output:
+        boot_records = []
+        for sector in range(16, 80):
+            output.seek(sector * 2048)
+            record = output.read(2048)
+            if len(record) != 2048 or record[1:7] != b"CD001\x01":
+                raise ValueError("Invalid ISO volume descriptor.")
+            if record[0] == 255:
+                break
+            if record[0] == 0 and record[7:39].rstrip(b"\0") == b"EL TORITO SPECIFICATION":
+                boot_records.append(struct.unpack_from("<I", record, 71)[0])
+        else:
+            raise ValueError("Missing ISO descriptor terminator.")
+        if len(boot_records) != 1:
+            raise ValueError("Expected exactly one El Torito catalog.")
+        output.seek(boot_records[0] * 2048)
+        catalog = output.read(2048)
+        if (len(catalog) != 2048 or catalog[:2] != b"\x01\xef"
+                or catalog[30:32] != b"\x55\xaa"
+                or sum(struct.unpack("<16H", catalog[:32])) % 65536
+                or catalog[32:34] != b"\x88\x00"
+                or any(catalog[64:])):
+            raise ValueError("Unexpected EFI boot catalog; refusing to patch.")
+        size = struct.unpack_from("<H", catalog, 38)[0] * 512
+        offset = struct.unpack_from("<I", catalog, 40)[0] * 2048
+        if size != len(prompt) or offset < 80 * 2048:
+            raise ValueError("Unexpected EFI boot image extent.")
+        output.seek(offset)
+        current = output.read(size)
+        if current == noprompt:
+            return
+        if current != prompt:
+            raise ValueError("Default EFI image does not match Microsoft's prompt image.")
+        output.seek(offset)
+        output.write(noprompt)
+        output.flush()
+        os.fsync(output.fileno())
+        output.seek(offset)
+        if output.read(size) != noprompt:
+            raise ValueError("EFI image write verification failed.")
+
+
+def prepare_windows_media(iso: Path) -> None:
+    """Read Microsoft's embedded images via a read-only, private mount."""
+    with tempfile.TemporaryDirectory(prefix="flatout2-media-") as directory:
+        mount = Path(directory) / "windows"
+        mount.mkdir()
+        run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount), str(iso)])
+        try:
+            boot = mount / "efi/microsoft/boot"
+            prompt = (boot / "efisys.bin").read_bytes()
+            noprompt = (boot / "efisys_noprompt.bin").read_bytes()
+        finally:
+            run(["/usr/bin/hdiutil", "detach", str(mount)])
+    patch_boot_image(iso, prompt, noprompt)
+    print("VM-local Windows media now uses Microsoft's verified no-prompt EFI image.")
 
 
 def configuration(vm_id: str) -> dict[str, Any]:
@@ -295,12 +349,13 @@ def refresh_seed(destination: Path) -> None:
     seed = destination / "seed"
     if not (seed / "Autounattend.xml").is_file():
         raise ValueError("Original unattended file is missing; refusing to regenerate accounts.")
+    prepare_windows_media(data / "windows.iso")
     write_seed(seed, data)
     start_setup_vm(bundle, vm_id)
 
 
 def write_seed(seed: Path, data: Path) -> None:
-    (seed / "startup.nsh").write_bytes(STARTUP_NSH.replace("\n", "\r\n").encode("ascii"))
+    (seed / "startup.nsh").unlink(missing_ok=True)
     shutil.copyfile(Path(__file__).with_name("guest-setup.ps1"), seed / "guest-setup.ps1")
     temporary = data / f"seed-{uuid.uuid4()}.iso"
     try:
@@ -314,7 +369,7 @@ def write_seed(seed: Path, data: Path) -> None:
 def start_setup_vm(bundle: Path, vm_id: str) -> None:
     run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
     run([str(UTM / "Contents/MacOS/utmctl"), "start", utm_id(vm_id)])
-    print("VM started. Firmware fallback should launch Windows Setup; report a Shell> prompt if it does not.")
+    print("VM started. Windows Setup should boot without a keypress; a Shell> prompt is a failed boot test.")
 
 
 def setup(args: argparse.Namespace) -> None:
@@ -350,6 +405,7 @@ def setup(args: argparse.Namespace) -> None:
     with (data / "system.raw").open("xb") as disk:
         disk.truncate(80 * 1024**3)
     shutil.copyfile(iso, data / "windows.iso")
+    prepare_windows_media(data / "windows.iso")
     admin, player = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
     credentials = {"VMAdmin": admin, "Player": player}
     (destination / "credentials.json").write_text(json.dumps(credentials, indent=2) + "\n")

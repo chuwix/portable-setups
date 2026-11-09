@@ -99,6 +99,8 @@ python3 flatout2_vm.py setup \
 
 `--windows-iso` and `--windows-url` are mutually exclusive. A URL override always requires
 `--windows-sha256`; local media defaults to the pinned hash unless explicitly overridden.
+The boot preparation currently recognizes only the EFI images bundled with the pinned ISO;
+different boot image hashes are rejected, even with an explicit ISO checksum override.
 Overrides must still supply an English ARM64 image containing the Windows 11 Pro edition,
 or the generated installation answer file must be adapted. A custom URL is an explicit trust
 decision, not an endorsement of that source.
@@ -111,14 +113,16 @@ recovery check for this prototype, not a general disk-content classifier.
 For a separate attempt use `--home '/another/path'`
 on every command. Paths can contain spaces; no repository or username is hardcoded.
 
-UTM opens and starts the generated VM. macOS may ask for permission. The firmware fallback
-attempts to start Windows Setup without a keypress. Locale, image selection,
+UTM opens and starts the generated VM. macOS may ask for permission. Setup replaces the
+keypress-required EFI boot image in the VM-local ISO copy with Microsoft's bundled
+`efisys_noprompt.bin`. It checks both boot image SHA256 hashes and the default EFI catalog
+entry before writing, then reads back the replacement. The cached download stays unchanged.
+This removes the timed keypress; first-boot and installation-restart behavior still require
+runtime verification. Locale, image selection,
 disk partitioning, and account creation are preconfigured. Current Windows builds may still
 show OOBE/license/account screens. Do not bypass security checks to suppress them.
 
-The seed media now includes a `startup.nsh` fallback for the UEFI shell. It searches mapped
-filesystems for an installed Windows boot manager first, then Microsoft's no-prompt CD loader.
-Automatic discovery of this script by the firmware is not yet verified. If it remains at
+No UEFI shell script is required. If the VM remains at
 `Shell>`, that is a failed boot test, not a Windows or PowerShell script failure. Do not format
 anything or recreate the VM to troubleshoot it; preserve the state for diagnosis.
 
