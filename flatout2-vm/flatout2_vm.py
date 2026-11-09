@@ -16,11 +16,19 @@ import sys
 import uuid
 import xml.etree.ElementTree as ET
 from typing import Any
+from urllib.parse import urlsplit
 
 
 NAME = "FlatOut 2 Sandbox"
 DEFAULT_HOME = Path.home() / "Library/Application Support/FlatOut2VM"
 UTM = Path("/Applications/UTM.app")
+WINDOWS_URL = (
+    "https://software-static.download.prss.microsoft.com/dbazure/"
+    "888969d5-f34g-4e03-ac9d-1f9786c66749/"
+    "26200.6584.250915-1905.25h2_ge_release_svc_refresh_CLIENT_CONSUMER_a64fre_en-us.iso"
+)
+WINDOWS_SHA256 = "32cde0071ed8086b29bb6c8c3bf17ba9e3cdf43200537434a811a9b6cc2711a1"
+DEFAULT_CACHE = Path.home() / "Library/Caches/portable-setups/flatout2-vm"
 NS = "urn:schemas-microsoft-com:unattend"
 ET.register_namespace("", NS)
 ET.register_namespace("wcm", "http://schemas.microsoft.com/WMIConfig/2002/State")
@@ -32,11 +40,51 @@ def run(args: list[str]) -> str:
 
 def verify_iso(path: Path, expected: str) -> None:
     if not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
-        raise ValueError("Supply the SHA256 published by Microsoft for this exact ISO.")
+        raise ValueError("Supply a trusted SHA256 for this exact ISO.")
     with path.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     if digest.lower() != expected.lower():
         raise ValueError("Windows ISO SHA256 mismatch; refusing to continue.")
+
+
+def acquire_iso(args: argparse.Namespace) -> Path:
+    """Fetch only the pinned image unless the caller explicitly overrides it."""
+    expected = args.windows_sha256 or WINDOWS_SHA256
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
+        raise ValueError("Expected SHA256 must contain exactly 64 hexadecimal characters.")
+    if args.windows_iso:
+        iso = args.windows_iso.expanduser().resolve(strict=True)
+        verify_iso(iso, expected)
+        return iso
+    url = args.windows_url or WINDOWS_URL
+    if args.windows_url and not args.windows_sha256:
+        raise ValueError("--windows-url requires an explicit --windows-sha256.")
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("ISO download URL must use HTTPS without embedded credentials.")
+    cache = args.cache.expanduser().resolve()
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    iso = cache / f"{expected.lower()}.iso"
+    if iso.exists():
+        if iso.is_symlink() or not iso.is_file():
+            raise ValueError("Cached ISO must be a regular file, not a symlink.")
+        verify_iso(iso, expected)
+        print(f"Using verified cached ISO: {iso}")
+        return iso
+    # Each transfer owns its temporary file; failed downloads are not trusted or reused.
+    partial = cache / f"{expected.lower()}.{uuid.uuid4()}.partial"
+    try:
+        print("Downloading pinned Windows image (about 6.8 GiB); verifying SHA256 afterward.", flush=True)
+        subprocess.run([
+            "/usr/bin/curl", "--fail", "--location", "--show-error", "--progress-bar",
+            "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "30",
+            "--max-time", "7200", "--output", str(partial), "--url", url,
+        ], check=True)
+        verify_iso(partial, expected)
+        os.replace(partial, iso)
+    finally:
+        partial.unlink(missing_ok=True)
+    return iso
 
 
 def configuration(vm_id: str) -> dict[str, Any]:
@@ -208,16 +256,13 @@ def setup(args: argparse.Namespace) -> None:
     check_host()
     if not args.accept_windows_license:
         raise ValueError("Read the Windows license, then pass --accept-windows-license to accept it.")
-    if not args.windows_iso or not args.windows_sha256:
-        raise ValueError("Provide --windows-iso and --windows-sha256 from Microsoft's download page.")
-    iso = args.windows_iso.resolve(strict=True)
-    verify_iso(iso, args.windows_sha256)
     firmware = UTM / "Contents/Resources/qemu/edk2-arm-secure-vars.fd"
     if not firmware.is_file():
         raise ValueError(f"UTM Secure Boot template is missing: {firmware}")
     destination = args.home.expanduser().resolve()
     if destination.exists():
         raise ValueError(f"Refusing to overwrite existing state in {destination}")
+    iso = acquire_iso(args)
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
     bundle = destination / f"{NAME}.utm"
     data = bundle / "Data"
@@ -250,8 +295,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("setup", "audit", "start"))
     parser.add_argument("--home", type=Path, default=DEFAULT_HOME)
-    parser.add_argument("--windows-iso", type=Path)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--windows-iso", type=Path, help="Use local media instead of downloading")
+    source.add_argument("--windows-url", help="Override the pinned HTTPS URL; requires --windows-sha256")
     parser.add_argument("--windows-sha256")
+    parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--accept-windows-license", action="store_true")
     args = parser.parse_args()
     if sys.version_info < (3, 11):

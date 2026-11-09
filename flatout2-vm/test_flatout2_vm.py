@@ -1,4 +1,5 @@
 import copy
+import argparse
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -101,6 +102,58 @@ class UnattendedTests(unittest.TestCase):
 
 
 class PrerequisiteTests(unittest.TestCase):
+    def arguments(self, directory: str, **overrides: object) -> argparse.Namespace:
+        values = dict(windows_iso=None, windows_url=None, windows_sha256=None, cache=Path(directory))
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_download_uses_pinned_url_and_checks_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            expected = hashlib.sha256(b"fixture").hexdigest()
+            args = self.arguments(directory, windows_sha256=expected)
+
+            def download(command: list[str], **kwargs: object) -> None:
+                self.assertIn(vm.WINDOWS_URL, command)
+                self.assertIn("--proto-redir", command)
+                Path(command[command.index("--output") + 1]).write_bytes(b"fixture")
+
+            with patch.object(vm.subprocess, "run", side_effect=download) as download_mock:
+                iso = vm.acquire_iso(args)
+                self.assertEqual(iso.read_bytes(), b"fixture")
+                vm.acquire_iso(args)
+                self.assertEqual(download_mock.call_count, 1)
+
+    def test_override_requires_hash_and_https(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cases = (
+                dict(windows_url="https://example.com/custom.iso"),
+                dict(windows_url="http://example.com/custom.iso", windows_sha256="0" * 64),
+                dict(windows_url="https://user:secret@example.com/a.iso", windows_sha256="0" * 64),
+            )
+            with patch.object(vm.subprocess, "run") as download:
+                for overrides in cases:
+                    with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                        vm.acquire_iso(self.arguments(directory, **overrides))
+                download.assert_not_called()
+
+    def test_bad_download_is_not_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def download(command: list[str], **kwargs: object) -> None:
+                Path(command[command.index("--output") + 1]).write_bytes(b"corrupt")
+
+            with patch.object(vm.subprocess, "run", side_effect=download):
+                with self.assertRaises(ValueError):
+                    vm.acquire_iso(self.arguments(directory))
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_cached_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.write_bytes(b"data")
+            (Path(directory) / f"{vm.WINDOWS_SHA256}.iso").symlink_to(target)
+            with self.assertRaises(ValueError):
+                vm.acquire_iso(self.arguments(directory))
+
     def test_iso_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             iso = Path(directory) / "windows.iso"

@@ -41,7 +41,7 @@ Keep UTM and Windows updated, leave Defender enabled, and play as **Player**, no
 
 - Apple Silicon Mac with macOS 13+, preferably at least 16 GiB RAM and 100 GiB free disk space.
 - UTM **5.0.8+**, Python **3.11+**, and a valid Windows 11 Pro license.
-- Official English (en-US) Windows 11 ARM64 multi-edition ISO and its published SHA256.
+- Internet access for the pinned Microsoft Windows ISO, or a local ARM64 ISO override.
 - Your own FlatOut 2 purchase on GOG or Steam. Use the same edition/version for all LAN players.
 
 For an **unmanaged** Mac with Homebrew:
@@ -54,23 +54,52 @@ brew install python
 If UTM is already installed, use `brew upgrade --cask utm`. On a declaratively managed Mac,
 update through its manager instead. These scripts never install or upgrade host software.
 
-Obtain Windows from [Microsoft](https://www.microsoft.com/en-us/software-download/windows11arm64).
-Select English, download the ARM64 ISO, and copy the SHA256 from **Verify your download**.
-The script checks the hash before preparing the VM. It does not circumvent Microsoft's download flow.
+### Pinned Windows media
+
+The default download is **Windows 11 25H2, build 26200.6584, ARM64, English (en-US)**,
+from [Microsoft's static CDN](https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26200.6584.250915-1905.25h2_ge_release_svc_refresh_CLIENT_CONSUMER_a64fre_en-us.iso).
+The version-specific URL has no expiring query token. Its availability is not guaranteed forever.
+
+- Size observed: **7,299,147,776 bytes**.
+- SHA256: `32cde0071ed8086b29bb6c8c3bf17ba9e3cdf43200537434a811a9b6cc2711a1`.
+- Provenance: downloaded directly over HTTPS from the Microsoft CDN on 2026-11-09;
+  SHA256 computed from those bytes. This is a maintainer-observed pin, not an independently
+  verified Microsoft-published checksum for this historical image.
+
+The script caches by SHA256 under `~/Library/Caches/portable-setups/flatout2-vm/`, verifies
+every cached image before use, rejects mismatches, and never falls back to a mirror or a newer
+Windows release. Redirects must remain HTTPS. The initial source is Microsoft; a checksum pin
+establishes subsequent byte identity, not independent certification of the source image.
 
 ## Prepare the VM
 
-Run from this directory, substituting your ISO path and Microsoft's hash:
+Run from this directory:
 
 ```sh
-python3 flatout2_vm.py setup \
-  --windows-iso '/path/to/Windows11_English_Arm64.iso' \
-  --windows-sha256 'PASTE_MICROSOFT_SHA256_HERE' \
-  --accept-windows-license
+python3 flatout2_vm.py setup --accept-windows-license
 ```
 
 Only pass `--accept-windows-license` after reading and accepting Microsoft's Windows license terms.
 The generic installation key selects Pro; it does not activate Windows or provide a license.
+
+Explicit overrides (no automatic source or version selection):
+
+```sh
+# Local copy of the exact pinned ISO uses the default checksum.
+python3 flatout2_vm.py setup --windows-iso '/path/to/windows-arm64.iso' --accept-windows-license
+
+# Another image requires its matching trusted checksum.
+python3 flatout2_vm.py setup \
+  --windows-url 'https://example.org/your-windows-arm64.iso' \
+  --windows-sha256 'YOUR_TRUSTED_64_CHARACTER_SHA256' \
+  --accept-windows-license
+```
+
+`--windows-iso` and `--windows-url` are mutually exclusive. A URL override always requires
+`--windows-sha256`; local media defaults to the pinned hash unless explicitly overridden.
+Overrides must still supply an English ARM64 image containing the Windows 11 Pro edition,
+or the generated installation answer file must be adapted. A custom URL is an explicit trust
+decision, not an endorsement of that source.
 
 Default state directory: `~/Library/Application Support/FlatOut2VM/`.
 The setup refuses to overwrite existing state. For a separate attempt use `--home '/another/path'`
@@ -142,13 +171,30 @@ python3 flatout2_vm.py audit
 python3 flatout2_vm.py start
 ```
 
-The `.command` launchers wrap these commands. Setup still needs its ISO/hash arguments; a
-double-click without them reports missing inputs. The Play launcher starts the registered VM.
+The `.command` launchers wrap these commands. Setup needs explicit Windows license acceptance;
+a double-click without arguments does not silently accept it. The Play launcher starts the registered VM.
 If it is already running, use its existing window rather than starting another instance.
 
 To remove: shut down the guest, remove its registration in UTM, then remove only the dedicated
 state directory after backing up needed saves. This also removes local credentials and media.
+The separately cached Windows ISO remains; remove its exact hash-named file to reclaim that space.
 Never point cleanup commands at a parent directory or use UTM deletion on unrelated VMs.
+
+## Disposable guests and Tiny11
+
+A one-shot guest does not require Defender or update support as a project policy. These protect
+the guest, not the hypervisor boundary. Host integration restrictions, deliberate network access,
+trusted source media, and current host/UTM security patches remain important. A disposable guest
+can still expose storefront credentials or attack LAN services during a session.
+
+The current prototype creates a persistent stock Windows guest. An immutable base plus disposable
+runs is planned, not implemented. Saves and login sessions would otherwise disappear with the run.
+
+Tiny11 ARM64/Core may be evaluated as a separate profile built from official source media with a
+pinned [Tiny11 Builder](https://github.com/ntdevlabs/tiny11builder) revision and reviewed recipe.
+No prebuilt third-party Tiny11 ISO is selected by default. Core removes servicing and disables
+Defender. Preserve x86 application support, graphics/network drivers, DirectX runtimes, and any
+storefront dependencies. A stripped image does not improve UTM's virtual GPU compatibility.
 
 ## Other platforms
 
