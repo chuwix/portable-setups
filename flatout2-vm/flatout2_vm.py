@@ -49,7 +49,16 @@ ET.register_namespace("wcm", "http://schemas.microsoft.com/WMIConfig/2002/State"
 
 
 def run(args: list[str]) -> str:
-    return subprocess.run(args, check=True, text=True, capture_output=True).stdout.strip()
+    result = subprocess.run(args, text=True, capture_output=True)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "No diagnostic output."
+        raise ValueError(f"{Path(args[0]).name} failed (exit {result.returncode}): {detail}")
+    return result.stdout.strip()
+
+
+def utm_id(value: str) -> str:
+    """UTM's scripting lookup requires uppercase UUID text."""
+    return str(uuid.UUID(value)).upper()
 
 
 def verify_iso(path: Path, expected: str) -> None:
@@ -274,7 +283,7 @@ def refresh_seed(destination: Path) -> None:
     with (bundle / "config.plist").open("rb") as source:
         config = plistlib.load(source)
     audit(config)
-    vm_id = str(uuid.UUID(config["Information"]["UUID"]))
+    vm_id = utm_id(config["Information"]["UUID"])
     status = run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id])
     if status != "stopped":
         raise ValueError("Shut down the VM before retrying setup; its disk will not be changed.")
@@ -304,7 +313,7 @@ def write_seed(seed: Path, data: Path) -> None:
 
 def start_setup_vm(bundle: Path, vm_id: str) -> None:
     run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
-    run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
+    run([str(UTM / "Contents/MacOS/utmctl"), "start", utm_id(vm_id)])
     print("VM started. Firmware fallback should launch Windows Setup; report a Shell> prompt if it does not.")
 
 
@@ -332,7 +341,7 @@ def setup(args: argparse.Namespace) -> None:
     bundle = destination / f"{NAME}.utm"
     data = bundle / "Data"
     data.mkdir(parents=True, mode=0o700)
-    vm_id = str(uuid.uuid4())
+    vm_id = str(uuid.uuid4()).upper()
     config = configuration(vm_id)
     audit(config)
     with (bundle / "config.plist").open("wb") as output:
@@ -387,8 +396,7 @@ def main() -> None:
             print("Configuration audit passed (not a proof of VM security).")
             if args.action == "start":
                 check_host()
-                vm_id = config["Information"]["UUID"]
-                uuid.UUID(vm_id)
+                vm_id = utm_id(config["Information"]["UUID"])
                 run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         print(f"Error: {error}", file=sys.stderr)

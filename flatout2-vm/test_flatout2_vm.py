@@ -107,6 +107,16 @@ class UnattendedTests(unittest.TestCase):
 
 
 class PrerequisiteTests(unittest.TestCase):
+    def test_utm_ids_use_uppercase(self) -> None:
+        self.assertEqual(vm.utm_id("2b87543d-5230-48a2-9255-161e7f1fe843"),
+                         "2B87543D-5230-48A2-9255-161E7F1FE843")
+
+    def test_command_failure_reports_stderr(self) -> None:
+        result = vm.subprocess.CompletedProcess(["utmctl"], 1, "", "Virtual machine not found.")
+        with patch.object(vm.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ValueError, "Virtual machine not found"):
+                vm.run(["utmctl", "status", "missing"])
+
     def test_retry_refuses_partitioned_disk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
