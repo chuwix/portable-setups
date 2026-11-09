@@ -102,6 +102,22 @@ class UnattendedTests(unittest.TestCase):
 
 
 class PrerequisiteTests(unittest.TestCase):
+    def test_declining_license_does_not_download(self) -> None:
+        args = argparse.Namespace(accept_windows_license=False)
+        with patch.object(vm, "check_host"), patch.object(vm.sys.stdin, "isatty", return_value=True), \
+                patch("builtins.input", return_value="no"), patch.object(vm, "acquire_iso") as acquire:
+            with self.assertRaisesRegex(ValueError, "Cancelled"):
+                vm.setup(args)
+            acquire.assert_not_called()
+
+    def test_noninteractive_run_requires_explicit_acceptance(self) -> None:
+        args = argparse.Namespace(accept_windows_license=False)
+        with patch.object(vm, "check_host"), patch.object(vm.sys.stdin, "isatty", return_value=False), \
+                patch.object(vm, "acquire_iso") as acquire:
+            with self.assertRaisesRegex(ValueError, "interactive terminal"):
+                vm.setup(args)
+            acquire.assert_not_called()
+
     def arguments(self, directory: str, **overrides: object) -> argparse.Namespace:
         values = dict(windows_iso=None, windows_url=None, windows_sha256=None, cache=Path(directory))
         values.update(overrides)

@@ -255,7 +255,15 @@ def audit(config: dict[str, Any]) -> None:
 def setup(args: argparse.Namespace) -> None:
     check_host()
     if not args.accept_windows_license:
-        raise ValueError("Read the Windows license, then pass --accept-windows-license to accept it.")
+        if not sys.stdin.isatty():
+            raise ValueError("Windows license acceptance requires an interactive terminal or --accept-windows-license.")
+        print("This experimental setup downloads about 6.8 GiB and creates an 80 GiB sparse Windows VM.")
+        print("A valid Windows 11 Pro license is required. No activation license is included.")
+        print("Read Microsoft's terms: https://www.microsoft.com/useterms")
+        print("The guest has network access. VM isolation does not guarantee host or LAN safety.")
+        answer = input("Do you accept the applicable Windows license terms and want to continue? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            raise ValueError("Cancelled; no download or VM creation performed.")
     firmware = UTM / "Contents/Resources/qemu/edk2-arm-secure-vars.fd"
     if not firmware.is_file():
         raise ValueError(f"UTM Secure Boot template is missing: {firmware}")

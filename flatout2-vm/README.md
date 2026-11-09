@@ -76,10 +76,12 @@ establishes subsequent byte identity, not independent certification of the sourc
 Run from this directory:
 
 ```sh
-python3 flatout2_vm.py setup --accept-windows-license
+./setup-flatout2.command
 ```
 
-Only pass `--accept-windows-license` after reading and accepting Microsoft's Windows license terms.
+The launcher prompts for Windows license acceptance before downloading or creating a VM.
+Declining cancels setup. For unattended use, pass `--accept-windows-license` only after reading
+and accepting Microsoft's Windows license terms.
 The generic installation key selects Pro; it does not activate Windows or provide a license.
 
 Explicit overrides (no automatic source or version selection):
@@ -171,8 +173,8 @@ python3 flatout2_vm.py audit
 python3 flatout2_vm.py start
 ```
 
-The `.command` launchers wrap these commands. Setup needs explicit Windows license acceptance;
-a double-click without arguments does not silently accept it. The Play launcher starts the registered VM.
+The `.command` launchers wrap these commands. Setup prompts for explicit Windows license acceptance;
+it does not silently accept it. The Play launcher starts the registered VM.
 If it is already running, use its existing window rather than starting another instance.
 
 To remove: shut down the guest, remove its registration in UTM, then remove only the dedicated
