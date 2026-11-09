@@ -18,6 +18,14 @@ SPEC.loader.exec_module(vm)
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_system_disk_precedes_installation_media(self) -> None:
+        drives = self.config["Drive"]
+        self.assertEqual([drive["ImageName"] for drive in drives],
+                         ["system.raw", "windows.iso", "seed.iso"])
+        self.assertEqual(drives[0]["Interface"], "NVMe")
+        self.assertFalse(drives[0]["ReadOnly"])
+        self.assertTrue(all(drive["ReadOnly"] for drive in drives[1:]))
+
     def setUp(self) -> None:
         self.config = vm.configuration("f28a7d62-4bdd-47af-86fe-e60e96edca44")
 
@@ -51,7 +59,7 @@ class ConfigurationTests(unittest.TestCase):
                 config["Drive"][0]["ImageName"] = name
                 with self.assertRaises(ValueError):
                     vm.audit(config)
-        self.config["Drive"][0]["ReadOnly"] = False
+        self.config["Drive"][1]["ReadOnly"] = False
         with self.assertRaises(ValueError):
             vm.audit(self.config)
 

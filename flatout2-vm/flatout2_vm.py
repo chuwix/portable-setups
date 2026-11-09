@@ -168,9 +168,9 @@ def configuration(vm_id: str) -> dict[str, Any]:
     """UTM v5.0.8's version-4 plist schema; all media stays in the VM bundle."""
     drives = []
     for filename, image_type, interface in (
+        ("system.raw", "Disk", "NVMe"),
         ("windows.iso", "CD", "USB"),
         ("seed.iso", "CD", "USB"),
-        ("system.raw", "Disk", "NVMe"),
     ):
         drives.append({
             "ImageName": filename, "ImageType": image_type, "Interface": interface,

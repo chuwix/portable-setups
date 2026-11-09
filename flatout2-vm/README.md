@@ -117,8 +117,10 @@ UTM opens and starts the generated VM. macOS may ask for permission. Setup repla
 keypress-required EFI boot image in the VM-local ISO copy with Microsoft's bundled
 `efisys_noprompt.bin`. It checks both boot image SHA256 hashes and the default EFI catalog
 entry before writing, then reads back the replacement. The cached download stays unchanged.
-This removes the timed keypress; first-boot and installation-restart behavior still require
-runtime verification. Locale, image selection,
+The system disk precedes both CDs in UTM's drive list, which determines QEMU boot priority.
+An empty disk should fall through to the no-prompt installer; subsequent restarts should boot
+the installed system. First boot without a keypress has been observed, but the combined
+disk-first installation and restart path still requires a fresh runtime test. Locale, image selection,
 disk partitioning, and account creation are preconfigured. Current Windows builds may still
 show OOBE/license/account screens. Do not bypass security checks to suppress them.
 
