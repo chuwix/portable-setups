@@ -8,17 +8,23 @@ credentials, Windows media, or game installers.
 
 Implemented: generation of a dedicated Windows 11 ARM UTM bundle, sparse 80 GiB guest disk,
 read-only installation media, unattended Windows answer file, separate administrator and
-standard player accounts, configuration audit, and guest-side GOG/Steam installation helper.
+player accounts, configuration audit, and guest-side GOG/Steam installation helper.
 
 Observed locally on UTM 5.0.8: unattended installation to the Windows sign-in screen,
 automatic NetKVM installation, outbound networking, intended privacy registry values,
 Player desktop after sign-in, and a normal reboot with networking preserved.
-The installed display driver is Microsoft Basic Display Driver, not validated acceleration.
+The separate experimental graphics VM passed a 32-bit Direct3D 9 rendering probe. With
+FlatOut 2 configured to **NoSound**, the user confirmed racing and saves work. Sound, LAN,
+cross-reboot save persistence, and a repeatable fresh installation remain unverified.
 
-New native Player auto-login and startup diagnostics still need a fresh-install test.
-Experimental graphics, DirectX 9 gameplay, sound, saves, and LAN discovery remain release
-blockers. Game installation and launch are not automated. The Play shortcut starts the VM,
-not the game. Local validation is not a published-repository E2E pass or proof of isolation.
+Player auto-login and startup diagnostics passed local runtime checks before the later
+administrator-account change; new administrator Player setup still needs a fresh-install test.
+Experimental graphics remains excluded from automated defaults. A new GOG USB/folder
+installation flow is under runtime verification: files install and the game runs, but the GOG
+installer exits with an access violation, so the helper correctly reports failure. It uses one
+explicit helper/elevation step inside Windows. The host Play shortcut still starts the VM,
+not the game; the guest installer creates a separate game shortcut. Local validation is not
+a published-repository E2E pass or proof of isolation.
 
 ## Security boundary
 
@@ -37,6 +43,10 @@ guarantee safety against hypervisor, graphics-driver, or network vulnerabilities
   They also exist on the seed ISO and may be cached by Windows Setup. Do not reuse them elsewhere.
 - Player automatic login stores its guest password in Windows and removes the guest login barrier.
   Anyone who can start or read the VM can access Player's data. VMAdmin never logs in automatically.
+- New VMs make Player a guest administrator so installation requires a Yes/No UAC approval,
+  not the generated VMAdmin password. UAC remains enabled. This weakens separation inside
+  Windows: Player applications can request administrative access. Host sharing stays disabled.
+  Existing standard-Player VMs are not silently migrated by changing these scripts.
 - The launch audit checks configuration, not the running guest, hypervisor integrity, or malware.
 
 Keep UTM and Windows updated, leave Defender enabled, and play as **Player**, not **VMAdmin**.
@@ -158,7 +168,7 @@ anything or recreate the VM to troubleshoot it; preserve the state for diagnosis
 
 ### Automatic Player startup (runtime test pending)
 
-New VMs configure Windows-native automatic login as the standard **Player** account. No host
+New VMs configure Windows-native automatic login as the administrator **Player** account. No host
 accessibility or screen-recording permission is required. Privileged preparation runs during
 Windows Setup, not through an elevated Player session. Automatic login is bounded: the answer
 file requests 999 logons; Windows documents an off-by-one issue in this setting. After that,
@@ -174,7 +184,59 @@ Windows Setup installs the diagnostic and its common Startup entry before Player
 The entry ignores other accounts. Failed setup attempts are preserved for diagnosis, not
 silently deleted or overwritten. Use **VMAdmin** credentials only when administration is needed.
 
-## Finish guest setup (currently manual)
+## Install your GOG offline copy (experimental)
+
+Finish Windows installation and shut it down normally before attaching game media. Plug in
+your USB drive, then run:
+
+```sh
+./install-flatout2.command
+# Or select a folder directly:
+./install-flatout2.command --source-dir '/path/to/installer-folder'
+```
+
+Use `--home '/your/test/home'` if the VM uses a nondefault state directory. Rerunning the
+setup launcher on an installed GPT guest disk also enters this flow instead of refreshing
+unattended media. The launcher refuses media changes while Windows is running.
+
+1. Choose USB detection or a source folder, then confirm the installer and applicable license
+   terms. If multiple candidates exist, select one. The initial version supports only GOG build
+   **1.0 (26697)**: `setup_flatout_2_1.0_(26697).exe` and its matching `-1.bin`, together.
+   Other builds fail explicitly rather than guessing whether all parts are present.
+2. The launcher copies only those two files, verifies SHA256 integrity, builds a read-only
+   `FLATOUTGAME` CD, and verifies its contents by mounting it read-only. These local checksums
+   establish transfer integrity, not vendor authenticity. The source drive is unchanged.
+3. Windows starts. Open the `FLATOUTGAME` CD in File Explorer and run **install-gog.cmd**.
+   Approve the Windows Yes/No elevation request. New VMs use an administrator Player account;
+   no generated guest password should be required. Older standard-Player VMs require migration
+   or a fresh VM before this flow works without a password. Do not disable UAC to work around it.
+   No host accessibility permission, shared folder, clipboard, or USB passthrough is used.
+4. The helper validates the file hashes and GOG Authenticode signature, copies the payload
+   onto the guest disk, and runs the installer silently into `C:\Games\FlatOut2` without an
+   automatic reboot. Do not disable signature checking, Defender, or execution policy if a
+   check fails. Report the error and preserve logs instead. The helper uses process-only
+   `RemoteSigned` for its initial and elevated PowerShell sessions. This permits local
+   scripts without changing saved execution policy or overriding Group Policy; downloaded
+   scripts still require signatures. The separate GOG installer signature check remains.
+5. Check the helper's result and logs under `C:\ProgramData\FlatOut2VM\install-<run-id>`.
+   Failed runs retain their payload for diagnosis. Successful runs remove that payload and
+   create a public **FlatOut 2** desktop shortcut. Launch it as Player, not VMAdmin.
+
+The host command cannot observe the guest result and does not claim installation success.
+Rerunning the helper skips reinstallation only when the installer receipt and game executable
+hash match. Installation success does not prove gameplay, sound, saves, or LAN operation.
+GOG and Steam inside Windows appear as planned menu options but are not automated yet.
+
+After success, shut down Windows and remove only the temporary game CD:
+
+```sh
+python3 flatout2_vm.py detach-game
+```
+
+This preserves setup CDs, the guest disk, saves, and USB source files. If attachment failed
+after creating `Data/game.iso`, preserve it for diagnosis; it is not silently overwritten.
+
+## Finish graphics and store setup (currently manual)
 
 1. Install the [official UTM Windows guest tools](https://docs.getutm.app/guest-support/windows/)
    inside the VM. Enable the experimental 3D driver. UTM recommends a fresh Windows installation.
