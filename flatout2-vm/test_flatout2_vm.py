@@ -88,6 +88,30 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class BootMediaTests(unittest.TestCase):
+    def test_network_staging_copies_only_allowlisted_arm64_package(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            seed = Path(directory) / "seed"
+
+            def mount_tools(args: list[str]) -> str:
+                if args[1] == "attach":
+                    mount = Path(args[args.index("-mountpoint") + 1])
+                    source = mount / "Drivers/NetKVM/w11/ARM64"
+                    source.mkdir(parents=True)
+                    for name in ("netkvm.inf", "netkvm.sys", "netkvm.cat", "netkvmp.exe", "netkvmco.exe", "netkvmco.dll"):
+                        (source / name).write_text("NTARM64\nCatalogFile = netkvm.cat")
+                    (source / "unwanted.exe").write_bytes(b"not copied")
+                    (mount / "Autounattend.xml").write_bytes(b"not copied")
+                    (mount / "virtio-win_license.txt").write_text("license")
+                return ""
+
+            with patch.object(vm, "verify_iso") as verify, patch.object(vm, "run", side_effect=mount_tools) as run:
+                vm.stage_network_driver(seed, Path("drivers.iso"))
+            verify.assert_called_once_with(Path("drivers.iso"), vm.DRIVERS_SHA256)
+            self.assertEqual(len(list((seed / "drivers/NetKVM").iterdir())), 7)
+            self.assertFalse((seed / "Autounattend.xml").exists())
+            self.assertFalse((seed / "drivers/NetKVM/unwanted.exe").exists())
+            self.assertEqual(run.call_args_list[-1].args[0][1], "detach")
+
     def fixture(self) -> tuple[bytearray, bytes, bytes]:
         image = bytearray(100 * 2048)
         image[16 * 2048:16 * 2048 + 7] = b"\x00CD001\x01"
@@ -149,6 +173,23 @@ class BootMediaTests(unittest.TestCase):
 
 
 class UnattendedTests(unittest.TestCase):
+    def test_oobe_uses_us_locale_and_keyboard(self) -> None:
+        root = ET.fromstring(vm.unattended("a", "b"))
+        ns = {"u": vm.NS}
+        locale = root.find("u:settings[@pass='oobeSystem']/u:component[@name='Microsoft-Windows-International-Core']", ns)
+        self.assertIsNotNone(locale)
+        for key, value in (("InputLocale", "0409:00000409"), ("SystemLocale", "en-US"),
+                           ("UILanguage", "en-US"), ("UserLocale", "en-US")):
+            self.assertEqual(locale.findtext(f"u:{key}", namespaces=ns), value)
+
+    def test_driver_path_uses_configuration_set_without_drive_letter(self) -> None:
+        root = ET.fromstring(vm.unattended("a", "b"))
+        ns = {"u": vm.NS}
+        self.assertEqual(root.findtext(".//u:UseConfigurationSet", namespaces=ns), "true")
+        driver = root.find("u:settings[@pass='windowsPE']/u:component[@name='Microsoft-Windows-PnpCustomizationsWinPE']", ns)
+        self.assertEqual(driver.findtext(".//u:Path", namespaces=ns), r"%configsetroot%\drivers\NetKVM")
+        self.assertNotIn(b"ForceUnsigned", vm.unattended("a", "b"))
+
     def test_accounts_are_distinct_and_xml_escapes_passwords(self) -> None:
         root = ET.fromstring(vm.unattended('admin<&"', 'player<&"'))
         ns = {"u": vm.NS}

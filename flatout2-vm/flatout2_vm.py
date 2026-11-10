@@ -33,6 +33,8 @@ WINDOWS_SHA256 = "32cde0071ed8086b29bb6c8c3bf17ba9e3cdf43200537434a811a9b6cc2711
 DEFAULT_CACHE = Path.home() / "Library/Caches/portable-setups/flatout2-vm"
 EFI_PROMPT_SHA256 = "0be1d959458b3a83ba84c7f58b1f4d0ca080abccecd53eae157c8d2f9bff2f98"
 EFI_NOPROMPT_SHA256 = "70eedc9e6a37f7ac688ed9b3eefe48ec26156e48cda669e520ccaad44130d113"
+DRIVERS_URL = "https://github.com/utmapp/qemu/releases/download/v10.0.2-utm/utm-guest-tools-0.1.271.iso"
+DRIVERS_SHA256 = "65b6a69b392ee01dd314c10f3dad9ebbf9c4160be43f5f0dd6bb715944d9095b"
 NS = "urn:schemas-microsoft-com:unattend"
 ET.register_namespace("", NS)
 ET.register_namespace("wcm", "http://schemas.microsoft.com/WMIConfig/2002/State")
@@ -75,19 +77,23 @@ def acquire_iso(args: argparse.Namespace) -> Path:
     parsed = urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("ISO download URL must use HTTPS without embedded credentials.")
-    cache = args.cache.expanduser().resolve()
+    return download_iso(url, expected, args.cache, "Windows image (about 6.8 GiB)")
+
+
+def download_iso(url: str, expected: str, cache: Path, label: str) -> Path:
+    cache = cache.expanduser().resolve()
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     iso = cache / f"{expected.lower()}.iso"
     if iso.exists():
         if iso.is_symlink() or not iso.is_file():
             raise ValueError("Cached ISO must be a regular file, not a symlink.")
         verify_iso(iso, expected)
-        print(f"Using verified cached ISO: {iso}")
+        print(f"Using verified cached {label}: {iso}")
         return iso
     # Each transfer owns its temporary file; failed downloads are not trusted or reused.
     partial = cache / f"{expected.lower()}.{uuid.uuid4()}.partial"
     try:
-        print("Downloading pinned Windows image (about 6.8 GiB); verifying SHA256 afterward.", flush=True)
+        print(f"Downloading pinned {label}; verifying SHA256 afterward.", flush=True)
         subprocess.run([
             "/usr/bin/curl", "--fail", "--location", "--show-error", "--progress-bar",
             "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "30",
@@ -98,6 +104,27 @@ def acquire_iso(args: argparse.Namespace) -> Path:
     finally:
         partial.unlink(missing_ok=True)
     return iso
+
+
+def stage_network_driver(seed: Path, media: Path) -> None:
+    """Copy only NetKVM ARM64 files; Windows enforces their catalog signature."""
+    verify_iso(media, DRIVERS_SHA256)
+    with tempfile.TemporaryDirectory(prefix="flatout2-drivers-") as directory:
+        mount = Path(directory) / "drivers"
+        mount.mkdir()
+        run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount), str(media)])
+        try:
+            source = mount / "Drivers/NetKVM/w11/ARM64"
+            inf = (source / "netkvm.inf").read_text()
+            if "NTARM64" not in inf or "CatalogFile = netkvm.cat" not in inf:
+                raise ValueError("Unexpected NetKVM ARM64 driver manifest.")
+            target = seed / "drivers/NetKVM"
+            target.mkdir(parents=True, exist_ok=True)
+            for name in ("netkvm.inf", "netkvm.sys", "netkvm.cat", "netkvmp.exe", "netkvmco.exe", "netkvmco.dll"):
+                shutil.copyfile(source / name, target / name)
+            shutil.copyfile(mount / "virtio-win_license.txt", target / "virtio-win_license.txt")
+        finally:
+            run(["/usr/bin/hdiutil", "detach", str(mount)])
 
 
 def patch_boot_image(iso: Path, prompt: bytes, noprompt: bytes) -> None:
@@ -233,6 +260,12 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
     for key in ("InputLocale", "SystemLocale", "UILanguage", "UserLocale"):
         child(locale, key, "en-US")
     setup = component(winpe, "Microsoft-Windows-Setup")
+    child(setup, "UseConfigurationSet", "true")
+    drivers = component(winpe, "Microsoft-Windows-PnpCustomizationsWinPE")
+    path = child(child(drivers, "DriverPaths"), "PathAndCredentials")
+    path.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
+    path.set("{http://schemas.microsoft.com/WMIConfig/2002/State}keyValue", "1")
+    child(path, "Path", r"%configsetroot%\drivers\NetKVM")
     disk = child(child(setup, "DiskConfiguration"), "Disk")
     disk.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
     child(disk, "DiskID", "0")
@@ -269,6 +302,10 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
     child(product, "Key", "VK7JG-NPHTM-C97JM-9MPGT-3V66T")
     child(product, "WillShowUI", "OnError")
     oobe = ET.SubElement(root, f"{{{NS}}}settings", {"pass": "oobeSystem"})
+    locale = component(oobe, "Microsoft-Windows-International-Core")
+    for key, value in (("InputLocale", "0409:00000409"), ("SystemLocale", "en-US"),
+                       ("UILanguage", "en-US"), ("UserLocale", "en-US")):
+        child(locale, key, value)
     shell = component(oobe, "Microsoft-Windows-Shell-Setup")
     accounts = child(child(shell, "UserAccounts"), "LocalAccounts")
     for name, group, password in (
@@ -349,6 +386,8 @@ def refresh_seed(destination: Path) -> None:
     seed = destination / "seed"
     if not (seed / "Autounattend.xml").is_file():
         raise ValueError("Original unattended file is missing; refusing to regenerate accounts.")
+    if not (seed / "drivers/NetKVM/netkvm.inf").is_file():
+        raise ValueError("This older setup lacks staged network drivers. Use a fresh --home directory for the updated installer.")
     prepare_windows_media(data / "windows.iso")
     write_seed(seed, data)
     start_setup_vm(bundle, vm_id)
@@ -392,6 +431,7 @@ def setup(args: argparse.Namespace) -> None:
         refresh_seed(destination)
         return
     iso = acquire_iso(args)
+    driver_media = download_iso(DRIVERS_URL, DRIVERS_SHA256, args.cache, "UTM driver media (about 121 MiB)")
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
     bundle = destination / f"{NAME}.utm"
     data = bundle / "Data"
@@ -412,6 +452,7 @@ def setup(args: argparse.Namespace) -> None:
     seed = destination / "seed"
     seed.mkdir(mode=0o700)
     (seed / "Autounattend.xml").write_bytes(unattended(admin, player))
+    stage_network_driver(seed, driver_media)
     write_seed(seed, data)
     (destination / "vm-id").write_text(vm_id + "\n")
     print(f"VM prepared: {bundle}\nCredentials: {destination / 'credentials.json'}")

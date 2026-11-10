@@ -106,6 +106,14 @@ or the generated installation answer file must be adapted. A custom URL is an ex
 decision, not an endorsement of that source.
 
 Default state directory: `~/Library/Application Support/FlatOut2VM/`.
+Setup also downloads and SHA256-verifies the [UTM guest tools 0.1.271 ISO](https://github.com/utmapp/qemu/releases/download/v10.0.2-utm/utm-guest-tools-0.1.271.iso)
+(about 121 MiB, SHA256 `65b6a69b392ee01dd314c10f3dad9ebbf9c4160be43f5f0dd6bb715944d9095b`).
+This hash was computed from the official download, not independently published by its vendor.
+Only the Windows 11 ARM64 NetKVM package and its license are copied into our seed ISO.
+The tools ISO's answer file and installer are not attached or run. Windows Setup stages the
+driver through `Microsoft-Windows-PnpCustomizationsWinPE` using `%configsetroot%`, so no CD
+drive letter is assumed. Windows signature enforcement stays enabled.
+
 The setup never recreates an existing guest disk. A retry refreshes seed media only when UTM
 reports the VM stopped and the first MiB of its raw guest disk is still zero-filled. Any
 partitioned disk is refused because the unattended installer wipes guest disk 0. This is a
@@ -120,7 +128,9 @@ entry before writing, then reads back the replacement. The cached download stays
 The system disk precedes both CDs in UTM's drive list, which determines QEMU boot priority.
 An empty disk should fall through to the no-prompt installer; subsequent restarts should boot
 the installed system. First boot without a keypress has been observed, but the combined
-disk-first installation and restart path still requires a fresh runtime test. Locale, image selection,
+disk-first installation and restart path still requires a fresh runtime test. US English locale
+and a single US keyboard are configured for both Windows Setup and OOBE. OOBE locale selection
+and automatic network-driver installation still require a fresh runtime test. Image selection,
 disk partitioning, and account creation are preconfigured. Current Windows builds may still
 show OOBE/license/account screens. Do not bypass security checks to suppress them.
 
