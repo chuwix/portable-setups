@@ -8,7 +8,7 @@ LAN, and further local VM experiments are deferred. Folder selection remains the
 The source menu now offers only these two implemented offline routes. Existing
 `feat/flatout2-vm` worktree, no ticket; canonical requirements are in implementation.md.
 User explicitly authorized commit, push, and merge of the experimental test candidate.
-Publication is in progress; runtime acceptance is not implied by merging.
+Published and merged to `main` as `f2f1eac`. Runtime acceptance is not implied by merging.
 
 Handoff: [second-machine checklist](testing.md), [user flow](../README.md), and
 [cleanup](cleanup.md). This is a runtime test candidate, not accepted E2E: known GOG crash,
@@ -22,7 +22,10 @@ passed. README now removes the contradictory full guest-tools/
 store setup recipe. New `docs/testing.md` records second-machine install/UAC/retry/Play/save/
 cleanup checks and blocked graphics/gameplay. Focused read-only handoff review passed with no
 findings; Windows runtime acceptance and the documented blockers remain open. Implementation
-committed as `31c19a7038fd7076736331b1780ffd88ea5bf0e8`; documentation/publication in progress.
+committed as `31c19a7038fd7076736331b1780ffd88ea5bf0e8`, handoff documentation as
+`9adc48b0752cbcdddbc79157b047fcae3b4ab6c8`. Both feature and main were pushed; 99 tests and
+launcher syntax checks passed immediately before publication. Worktree retained for runtime
+follow-up; source checkout is clean apart from this publication record update.
 No VM operations or deletion in this scope-finalization pass.
 Startup/privacy implementation committed locally as
 `613637d72c7c464dc3b84661a9d0ec513eac2225`; 37 offline tests passed before commit.
