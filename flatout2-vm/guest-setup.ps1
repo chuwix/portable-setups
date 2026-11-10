@@ -56,4 +56,4 @@ if ($GameExe) {
     Write-Host 'LAN rule added for this executable on Private networks, local subnet only.'
 }
 
-Write-Host 'Finish installation, then sign out of VMAdmin and play using the standard Player account.'
+Write-Host 'Finish installation, then sign out of VMAdmin and play using the Player account.'

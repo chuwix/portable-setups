@@ -322,7 +322,7 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
     accounts = child(child(shell, "UserAccounts"), "LocalAccounts")
     for name, group, password in (
         ("VMAdmin", "Administrators", admin_password),
-        ("Player", "Users", gamer_password),
+        ("Player", "Administrators", gamer_password),
     ):
         account = child(accounts, "LocalAccount")
         account.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
@@ -445,6 +445,14 @@ def setup(args: argparse.Namespace) -> None:
         raise ValueError(f"UTM Secure Boot template is missing: {firmware}")
     destination = args.home.expanduser().resolve()
     if destination.exists():
+        disk_path = destination / f"{NAME}.utm/Data/system.raw"
+        if disk_path.is_file() and not disk_path.is_symlink():
+            with disk_path.open("rb") as disk:
+                header = disk.read(8192)
+            if header[512:520] == b"EFI PART" or header[4096:4104] == b"EFI PART":
+                args.action = "install-game"
+                game_media(args)
+                return
         refresh_seed(destination)
         return
     iso = acquire_iso(args)
@@ -476,9 +484,208 @@ def setup(args: argparse.Namespace) -> None:
     start_setup_vm(bundle, vm_id)
 
 
+# The initial offline flow knows the complete file layout for this GOG build only.
+GOG_INSTALLER = "setup_flatout_2_1.0_(26697).exe"
+GOG_PARTS = (GOG_INSTALLER, "setup_flatout_2_1.0_(26697)-1.bin")
+GOG_PATTERN = re.compile(r"setup_flatout_2_.+\.exe", re.IGNORECASE)
+
+
+def installer_files(installer: Path) -> list[Path]:
+    if any(path.is_symlink() for path in installer.absolute().parents):
+        raise ValueError("Installer directory must not contain symlinks.")
+    if installer.name != GOG_INSTALLER:
+        raise ValueError(f"Unsupported GOG installer build: {installer.name}. Expected {GOG_INSTALLER}.")
+    files = [installer.parent / name for name in GOG_PARTS]
+    for path in files:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"Missing, empty, or symlinked installer part: {path}")
+    extras = set(installer.parent.glob(installer.stem + "-*.bin")) - set(files)
+    if extras:
+        raise ValueError("Unexpected BIN parts for this supported build; select a clean installer folder.")
+    return files
+
+
+def find_installers(roots: list[Path]) -> list[Path]:
+    candidates: list[Path] = []
+    visited = 0
+    for root in roots:
+        root = root.expanduser()
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError(f"Source must be an existing non-symlink directory: {root}")
+        for directory, children, files in os.walk(root, followlinks=False):
+            visited += 1
+            if visited > 5000:
+                raise ValueError("Source scan too large; select a more specific installer directory.")
+            parent = Path(directory)
+            depth = len(parent.relative_to(root).parts)
+            children[:] = sorted(name for name in children if depth < 3 and not name.startswith(".")
+                                 and name != "System Volume Information" and not (parent / name).is_symlink())
+            for name in files:
+                path = parent / name
+                if GOG_PATTERN.fullmatch(name) and not path.is_symlink() and path.is_file():
+                    candidates.append(path)
+    return sorted(set(candidates))
+
+
+def usb_roots() -> list[Path]:
+    listing = plistlib.loads(run(["/usr/sbin/diskutil", "list", "-plist", "external", "physical"]).encode())
+    roots: list[Path] = []
+
+    def visit(entry: dict[str, Any]) -> None:
+        mount = entry.get("MountPoint")
+        if mount:
+            info = plistlib.loads(run(["/usr/sbin/diskutil", "info", "-plist", mount]).encode())
+            if info.get("BusProtocol") == "USB" and not info.get("Internal", True):
+                roots.append(Path(mount))
+        for child in entry.get("Partitions", []):
+            visit(child)
+
+    for entry in listing.get("AllDisksAndPartitions", []):
+        visit(entry)
+    return roots
+
+
+def choose_installer(source: Path | None) -> Path:
+    if source is None:
+        print("Game source:\n  1. Detect GOG offline installer on USB\n  2. Select installer folder\n"
+              "  3. GOG inside Windows (not automated yet)\n  4. Steam inside Windows (not automated yet)")
+        choice = input("Choose [1-4]: ").strip()
+        if choice in ("3", "4"):
+            raise ValueError("Authenticated store routes are not implemented yet. Use a GOG offline installer for this prototype.")
+        if choice == "2":
+            source = Path(input("Installer source folder (paste its path, without surrounding quotes): ").strip())
+        elif choice != "1":
+            raise ValueError("Cancelled; choose a listed source option.")
+    candidates = find_installers([source] if source is not None else usb_roots())
+    if not candidates:
+        raise ValueError("No FlatOut 2 GOG offline installer found within three subfolders. Use --source-dir with its folder.")
+    for index, path in enumerate(candidates, 1):
+        print(f"  {index}. {path}")
+    if len(candidates) == 1:
+        if input("Use this installer and accept its applicable game license terms? [y/N] ").strip().lower() not in ("y", "yes"):
+            raise ValueError("Cancelled; no game files copied.")
+        selected = candidates[0]
+    else:
+        answer = input("Select installer number (selection accepts its applicable game license terms; Enter cancels): ").strip()
+        if not answer.isdecimal() or not 1 <= int(answer) <= len(candidates):
+            raise ValueError("Cancelled; no valid installer selected.")
+        selected = candidates[int(answer) - 1]
+    installer_files(selected)
+    return selected
+
+
+def file_hash(path: Path) -> str:
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def build_game_media(installer: Path, output: Path) -> None:
+    files = installer_files(installer)
+    if output.exists() or output.is_symlink():
+        raise ValueError("Game media destination already exists; refusing overwrite.")
+    with tempfile.TemporaryDirectory(prefix="flatout2-game-", dir=output.parent) as directory:
+        stage = Path(directory) / "media"
+        stage.mkdir()
+        manifest: list[dict[str, Any]] = []
+        for source in files:
+            print(f"Copying and verifying {source.name} ...", flush=True)
+            expected = file_hash(source)
+            target = stage / source.name
+            shutil.copyfile(source, target)
+            if target.stat().st_size != source.stat().st_size or file_hash(target) != expected:
+                raise ValueError(f"Installer copy checksum mismatch: {source.name}")
+            manifest.append({"name": source.name, "size": target.stat().st_size, "sha256": expected})
+        (stage / "game-media.json").write_text(json.dumps({"schema": 1, "files": manifest}, indent=2) + "\n")
+        for name in ("install-gog.cmd", "install-gog.ps1"):
+            shutil.copyfile(Path(__file__).with_name(name), stage / name)
+        temporary = Path(directory) / "game.iso"
+        run(["/usr/bin/hdiutil", "makehybrid", "-iso", "-joliet", "-default-volume-name",
+             "FLATOUTGAME", "-o", str(temporary), str(stage)])
+        mount = Path(directory) / "verify"
+        mount.mkdir()
+        run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount), str(temporary)])
+        try:
+            for entry in manifest:
+                if file_hash(mount / entry["name"]) != entry["sha256"]:
+                    raise ValueError("Built game ISO failed readback verification.")
+            for name in ("game-media.json", "install-gog.cmd", "install-gog.ps1"):
+                if (mount / name).read_bytes() != (stage / name).read_bytes():
+                    raise ValueError("Built game ISO helper/manifest failed verification.")
+        finally:
+            run(["/usr/bin/hdiutil", "detach", str(mount)])
+        os.replace(temporary, output)
+
+
+def reload_vm(vm_id: str) -> None:
+    # Pass the UUID as data, never interpolate media paths into AppleScript.
+    run(["/usr/bin/osascript", "-e", 'on run argv\ntell application "UTM" to reload configuration '
+         '(first virtual machine whose id is (item 1 of argv))\nend run', vm_id])
+
+
+def game_media(args: argparse.Namespace) -> None:
+    destination = args.home.expanduser().absolute()
+    bundle = destination / f"{NAME}.utm"
+    if any(path.is_symlink() for path in (destination, *destination.parents)) or any(p.is_symlink() for p in bundle.rglob("*")):
+        raise ValueError("Refusing VM state containing symlinks.")
+    config_path = bundle / "config.plist"
+    original = config_path.read_bytes()
+    config = plistlib.loads(original)
+    audit(config)
+    vm_id = utm_id(config["Information"]["UUID"])
+    if run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id]) != "stopped":
+        raise ValueError("Shut down Windows normally, then rerun this command. No VM files were changed.")
+    data = bundle / "Data"
+    with (data / "system.raw").open("rb") as disk:
+        header = disk.read(8192)
+    if header[512:520] != b"EFI PART" and header[4096:4104] != b"EFI PART":
+        raise ValueError("No installed GPT guest disk found. Finish Windows setup first; its disk will not be changed.")
+    attached = [d for d in config["Drive"] if d["ImageName"] == "game.iso"]
+    if args.action == "detach-game":
+        if not attached:
+            print("No game CD is attached.")
+            return
+        config["Drive"] = [d for d in config["Drive"] if d["ImageName"] != "game.iso"]
+    else:
+        if attached or (data / "game.iso").exists():
+            raise ValueError("Game media already exists. Use it inside Windows, or run detach-game while stopped before retrying.")
+        installer = choose_installer(args.source_dir)
+        build_game_media(installer, data / "game.iso")
+        config["Drive"].append({"ImageName": "game.iso", "ImageType": "CD", "Interface": "USB",
+                               "InterfaceVersion": 1, "Identifier": str(uuid.uuid4()), "ReadOnly": True})
+    audit(config)
+    if run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id]) != "stopped" or config_path.read_bytes() != original:
+        raise ValueError("VM started or configuration changed during media preparation; refusing configuration update.")
+    # Only the configuration is replaced; setup CDs and the guest disk are untouched.
+    temporary = bundle / f"config-{uuid.uuid4()}.plist"
+    try:
+        temporary.write_bytes(plistlib.dumps(config))
+        os.replace(temporary, config_path)
+        reload_vm(vm_id)
+    except Exception:
+        temporary.write_bytes(original)
+        os.replace(temporary, config_path)
+        # Keep generated media as evidence when attachment fails, rather than deleting it.
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    if args.action == "detach-game":
+        (data / "game.iso").unlink(missing_ok=True)
+        print("Game CD detached and its local ISO removed; source files and guest installation preserved.")
+        return
+    run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
+    print("Windows started with the read-only FLATOUTGAME CD. Inside Windows, open that CD and run install-gog.cmd.\n"
+          "Approve the Windows Yes/No elevation prompt. New VMs use an administrator Player account.\n"
+          "An older standard-Player VM needs an administrator migration before this password-free flow.\n"
+          "Do not run the GOG EXE directly.\n"
+          "The helper checks hashes/signature, installs silently, and reports its result inside Windows.\n"
+          "Then use the public FlatOut 2 shortcut as Player. This host command cannot observe installation success.\n"
+          "After success, shut down Windows and run detach-game to remove temporary installer media.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("setup", "audit", "start"))
+    parser.add_argument("action", choices=("setup", "audit", "start", "install-game", "detach-game"))
+    parser.add_argument("--source-dir", type=Path, help="Directory containing the GOG offline installer")
     parser.add_argument("--home", type=Path, default=DEFAULT_HOME)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--windows-iso", type=Path, help="Use local media instead of downloading")
@@ -491,7 +698,10 @@ def main() -> None:
         parser.error("Python 3.11 or later is required.")
     os.umask(0o077)
     try:
-        if args.action == "setup":
+        if args.action in ("install-game", "detach-game"):
+            check_host()
+            game_media(args)
+        elif args.action == "setup":
             setup(args)
         else:
             bundle = args.home.expanduser() / f"{NAME}.utm"
@@ -512,7 +722,7 @@ def main() -> None:
                 check_host()
                 vm_id = utm_id(config["Information"]["UUID"])
                 run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
-    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, EOFError, subprocess.CalledProcessError) as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
 

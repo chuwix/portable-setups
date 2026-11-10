@@ -231,7 +231,7 @@ class UnattendedTests(unittest.TestCase):
         values = {a.findtext("u:Name", namespaces=ns): (
             a.findtext("u:Group", namespaces=ns), a.findtext("u:Password/u:Value", namespaces=ns)
         ) for a in accounts}
-        self.assertEqual(values["Player"], ("Users", 'player<&"'))
+        self.assertEqual(values["Player"], ("Administrators", 'player<&"'))
         self.assertEqual(values["VMAdmin"], ("Administrators", 'admin<&"'))
         for component in root.findall(".//u:component", ns):
             self.assertEqual(component.attrib["processorArchitecture"], "arm64")
