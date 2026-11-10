@@ -182,13 +182,25 @@ class UnattendedTests(unittest.TestCase):
                            ("UILanguage", "en-US"), ("UserLocale", "en-US")):
             self.assertEqual(locale.findtext(f"u:{key}", namespaces=ns), value)
 
-    def test_driver_path_uses_configuration_set_without_drive_letter(self) -> None:
+    def test_driver_install_runs_before_oobe_without_fixed_drive_letter(self) -> None:
         root = ET.fromstring(vm.unattended("a", "b"))
         ns = {"u": vm.NS}
-        self.assertEqual(root.findtext(".//u:UseConfigurationSet", namespaces=ns), "true")
-        driver = root.find("u:settings[@pass='windowsPE']/u:component[@name='Microsoft-Windows-PnpCustomizationsWinPE']", ns)
-        self.assertEqual(driver.findtext(".//u:Path", namespaces=ns), r"%configsetroot%\drivers\NetKVM")
+        driver = root.find("u:settings[@pass='specialize']/u:component[@name='Microsoft-Windows-Deployment']", ns)
+        command = driver.findtext(".//u:Path", namespaces=ns)
+        self.assertIn("flatout2-seed.tag", command)
+        self.assertIn("install-network.cmd", command)
+        self.assertIn("exit $LASTEXITCODE", command)
+        self.assertEqual(driver.findtext(".//u:WillReboot", namespaces=ns), "OnRequest")
+        self.assertNotIn("Bypass", command)
         self.assertNotIn(b"ForceUnsigned", vm.unattended("a", "b"))
+
+    def test_network_script_maps_setup_reboot_and_failure_codes(self) -> None:
+        script = Path(__file__).with_name("install-network.cmd").read_text()
+        self.assertIn('if "%RESULT%"=="3010" exit /b 1', script)
+        self.assertIn('if not "%RESULT%"=="0" exit /b 10', script)
+        self.assertIn('/add-driver "%~dp0drivers\\NetKVM\\netkvm.inf" /install', script)
+        self.assertIn("flatout2-network.log", script)
+        self.assertNotIn("/reboot", script)
 
     def test_accounts_are_distinct_and_xml_escapes_passwords(self) -> None:
         root = ET.fromstring(vm.unattended('admin<&"', 'player<&"'))

@@ -260,12 +260,6 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
     for key in ("InputLocale", "SystemLocale", "UILanguage", "UserLocale"):
         child(locale, key, "en-US")
     setup = component(winpe, "Microsoft-Windows-Setup")
-    child(setup, "UseConfigurationSet", "true")
-    drivers = component(winpe, "Microsoft-Windows-PnpCustomizationsWinPE")
-    path = child(child(drivers, "DriverPaths"), "PathAndCredentials")
-    path.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
-    path.set("{http://schemas.microsoft.com/WMIConfig/2002/State}keyValue", "1")
-    child(path, "Path", r"%configsetroot%\drivers\NetKVM")
     disk = child(child(setup, "DiskConfiguration"), "Disk")
     disk.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
     child(disk, "DiskID", "0")
@@ -301,6 +295,16 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
     product = child(userdata, "ProductKey")
     child(product, "Key", "VK7JG-NPHTM-C97JM-9MPGT-3V66T")
     child(product, "WillShowUI", "OnError")
+    specialize = ET.SubElement(root, f"{{{NS}}}settings", {"pass": "specialize"})
+    deployment = component(specialize, "Microsoft-Windows-Deployment")
+    command = child(child(deployment, "RunSynchronous"), "RunSynchronousCommand")
+    command.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
+    child(command, "Order", "1")
+    child(command, "Description", "Install pinned ARM64 network driver before OOBE")
+    child(command, "Path", 'powershell.exe -NoProfile -NonInteractive -Command "'
+          "$m=@(Get-PSDrive -PSProvider FileSystem | Where-Object {Test-Path ($_.Root+'flatout2-seed.tag')}); "
+          "if($m.Count -ne 1){exit 10}; & ($m[0].Root+'install-network.cmd'); exit $LASTEXITCODE\"")
+    child(command, "WillReboot", "OnRequest")
     oobe = ET.SubElement(root, f"{{{NS}}}settings", {"pass": "oobeSystem"})
     locale = component(oobe, "Microsoft-Windows-International-Core")
     for key, value in (("InputLocale", "0409:00000409"), ("SystemLocale", "en-US"),
@@ -395,6 +399,8 @@ def refresh_seed(destination: Path) -> None:
 
 def write_seed(seed: Path, data: Path) -> None:
     (seed / "startup.nsh").unlink(missing_ok=True)
+    (seed / "flatout2-seed.tag").write_text("portable-setups FlatOut 2 installation media\n")
+    shutil.copyfile(Path(__file__).with_name("install-network.cmd"), seed / "install-network.cmd")
     shutil.copyfile(Path(__file__).with_name("guest-setup.ps1"), seed / "guest-setup.ps1")
     temporary = data / f"seed-{uuid.uuid4()}.iso"
     try:

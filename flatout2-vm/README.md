@@ -110,9 +110,13 @@ Setup also downloads and SHA256-verifies the [UTM guest tools 0.1.271 ISO](https
 (about 121 MiB, SHA256 `65b6a69b392ee01dd314c10f3dad9ebbf9c4160be43f5f0dd6bb715944d9095b`).
 This hash was computed from the official download, not independently published by its vendor.
 Only the Windows 11 ARM64 NetKVM package and its license are copied into our seed ISO.
-The tools ISO's answer file and installer are not attached or run. Windows Setup stages the
-driver through `Microsoft-Windows-PnpCustomizationsWinPE` using `%configsetroot%`, so no CD
-drive letter is assumed. Windows signature enforcement stays enabled.
+The tools ISO's answer file and installer are not attached or run. A synchronous command in
+the `specialize` pass locates our seed by `flatout2-seed.tag` and runs `pnputil /add-driver /install`
+before OOBE. No CD drive letter is assumed. Windows signature enforcement stays enabled.
+Results are written to `C:\Windows\Panther\flatout2-network.log`; missing media or a failed
+installation fails the command rather than silently continuing. A requested reboot is handed
+to Windows Setup. This path replaces WinPE configuration-set staging, which copied no drivers
+in the observed Windows 11 25H2 installation. Runtime validation remains pending.
 
 The setup never recreates an existing guest disk. A retry refreshes seed media only when UTM
 reports the VM stopped and the first MiB of its raw guest disk is still zero-filled. Any
