@@ -8,7 +8,12 @@ credentials, Windows media, or game installers.
 
 Implemented: generation of a dedicated Windows 11 ARM UTM bundle, sparse 80 GiB guest disk,
 read-only installation media, unattended Windows answer file, separate administrator and
-player accounts, configuration audit, and guest-side GOG/Steam installation helper.
+player accounts, configuration audit, and guest-side GOG offline installation helper.
+
+**Current delivery scope: installation from a flash drive containing the supported GOG
+offline installer.** Selecting its folder explicitly is also supported. Authenticated GOG,
+Steam, LAN, and reliable audio are deferred. For testing on another Mac, follow the
+[second-machine acceptance checklist](docs/testing.md).
 
 Observed locally on UTM 5.0.8: unattended installation to the Windows sign-in screen,
 automatic NetKVM installation, outbound networking, intended privacy registry values,
@@ -17,14 +22,13 @@ The separate experimental graphics VM passed a 32-bit Direct3D 9 rendering probe
 FlatOut 2 configured to **NoSound**, the user confirmed racing and saves work. Sound, LAN,
 cross-reboot save persistence, and a repeatable fresh installation remain unverified.
 
-Player auto-login and startup diagnostics passed local runtime checks before the later
-administrator-account change; new administrator Player setup still needs a fresh-install test.
-Experimental graphics remains excluded from automated defaults. A new GOG USB/folder
-installation flow is under runtime verification: files install and the game runs, but the GOG
-installer exits with an access violation, so the helper correctly reports failure. It uses one
-explicit helper/elevation step inside Windows. The host Play shortcut still starts the VM,
-not the game; the guest installer creates a separate game shortcut. Local validation is not
-a published-repository E2E pass or proof of isolation.
+The new first-login dispatcher, administrator Player account, receipt-gated launch, and repair
+flow pass offline tests but still need fresh Windows runtime acceptance. Experimental graphics
+remains excluded from automated defaults. In the earlier USB test the GOG installer exited
+with `0xC000041D` after writing game files; the helper correctly reports failure. Do not treat
+those files as a successful installation. An audio experiment also produced severe lag;
+audio remains disabled in the supported launcher. Local validation is not a
+published-repository E2E pass or proof of isolation.
 
 ## Security boundary
 
@@ -57,7 +61,9 @@ Keep UTM and Windows updated, leave Defender enabled, and play as **Player**, no
 - Terminal and Homebrew. Setup installs missing Python **3.11+** and UTM **5.0.8+** through brew.
 - A valid Windows 11 Pro license.
 - Internet access for the pinned Microsoft Windows ISO, or a local ARM64 ISO override.
-- Your own FlatOut 2 purchase on GOG or Steam. Use the same edition/version for all LAN players.
+- Your own GOG FlatOut 2 offline installer, build **1.0 (26697)**, on a mounted flash drive.
+  Keep `setup_flatout_2_1.0_(26697).exe` and `setup_flatout_2_1.0_(26697)-1.bin` together.
+  Other builds and Steam installations are not supported by this flow.
 
 The setup launcher checks prerequisites and installs missing tools through Homebrew. It upgrades
 an outdated UTM if Homebrew manages it; an outdated unmanaged UTM may require manual resolution
@@ -87,13 +93,42 @@ establishes subsequent byte identity, not independent certification of the sourc
 
 ## Prepare the VM
 
+Finished playing for good? See [shutdown, media cleanup, and permanent VM removal](docs/cleanup.md).
+Removing the VM also removes its saves and Windows state; the guide explains backup first.
+
 Run from this directory:
 
 ```sh
 ./setup-flatout2.command
 ```
 
+1. Connect the flash drive. Accept the Windows terms only if you agree to them.
+2. Choose **1. Detect GOG offline installer on USB** and confirm the displayed installer.
+   If detection fails, choose its folder instead, or rerun with `--source-dir '/Volumes/DRIVE/folder'`.
+3. Wait for copying and read-only ISO verification. When the launcher says the source is no
+   longer needed, you may eject the flash drive in Finder. It is never passed through to Windows.
+4. Let Windows finish setup and sign in automatically as **Player**. The bounded startup
+   helper requests **Yes/No UAC consent** for installation. Approve only the expected helper.
+   A generated administrator password should not be needed on a fresh VM.
+5. A valid successful result allows the unelevated helper to launch the game. If a restart is
+   required, restart Windows normally. On failure, preserve the report and logs; use
+   **Retry FlatOut 2 installation** deliberately rather than reinstalling over saves manually.
+
+Graphics is still a separate test prerequisite, not an automated step. See
+[graphics test constraints](#graphics-test-prerequisite-not-automated) before assessing gameplay.
+The known installer crash must remain a failed test even if the game files are present.
+
+For later sessions, run `./play-flatout2.command`. If Windows is stopped, it starts Windows
+and the login helper attempts receipt-validated game launch. If Windows is already running,
+Play selects UTM and asks you to use the guest **FlatOut 2** shortcut; it does not remotely
+launch a second game process. Guest launches run unelevated as Player.
+
 The launcher prompts for Windows license acceptance before downloading or creating a VM.
+Fresh setup also asks you to select and confirm your supported GOG USB/folder installer before
+downloads. It stages a verified game CD before the first Windows boot. The new first-login
+install/launch path passes offline tests but still needs a fresh-VM runtime test; the known GOG
+installer crash remains unresolved. Keep its failure logs rather than assuming installed files
+mean a successful setup.
 Declining cancels setup. For unattended use, pass `--accept-windows-license` only after reading
 and accepting Microsoft's Windows license terms.
 The generic installation key selects Pro; it does not activate Windows or provide a license.
@@ -174,20 +209,24 @@ Windows Setup, not through an elevated Player session. Automatic login is bounde
 file requests 999 logons; Windows documents an off-by-one issue in this setting. After that,
 use the generated `credentials.json` to sign in. This does not modify existing installations.
 
-At each Player login, a guest-only diagnostic runs from `C:\Program Files\FlatOut2VM` and opens
-`%LOCALAPPDATA%\FlatOut2VM\status.txt`. A `dxdiag.txt` report is written beside it. The report
-includes account, network configuration, and display-driver information, but never declares
-the game ready merely because Windows booted. It uses no network downloads, sharing agents,
-host scripting, or elevation. Store sign-in and game installation remain separate.
+New Windows preparation installs a brief, unelevated Player-login dispatcher under
+`C:\Program Files\FlatOut2VM`. It validates a protected installation receipt and launches the
+game, or attempts installation from exactly one confirmed game CD. It records the attempt
+before requesting UAC; denial or failure requires an explicit **Retry FlatOut 2 installation**
+action rather than prompting again every login. It exits after handling startup, with no
+resident listener or service. Existing VMs are not updated merely by changing repository files.
 
-Windows Setup installs the diagnostic and its common Startup entry before Player login.
-The entry ignores other accounts. Failed setup attempts are preserved for diagnosis, not
-silently deleted or overwritten. Use **VMAdmin** credentials only when administration is needed.
+The **FlatOut 2 diagnostics** shortcut retains the account, network, and display report under
+`%LOCALAPPDATA%\FlatOut2VM`; successful game startup does not open it over the game. The Startup
+entry ignores other accounts. Failed setup attempts are preserved for diagnosis. Store sign-in
+remains user-controlled inside Windows. All new dispatcher behavior still needs Windows runtime
+verification, including UAC, ACLs, shortcuts, and unelevated game launch.
 
-## Install your GOG offline copy (experimental)
+## Attach or retry the flash-drive installer (experimental)
 
-Finish Windows installation and shut it down normally before attaching game media. Plug in
-your USB drive, then run:
+Fresh setup already stages the game CD; do not run a second attachment while Windows is
+installing. Use this separate command for an existing VM without game media, or to recover an
+attachment failure. Shut Windows down normally, connect the flash drive, then run:
 
 ```sh
 ./install-flatout2.command
@@ -206,7 +245,8 @@ unattended media. The launcher refuses media changes while Windows is running.
 2. The launcher copies only those two files, verifies SHA256 integrity, builds a read-only
    `FLATOUTGAME` CD, and verifies its contents by mounting it read-only. These local checksums
    establish transfer integrity, not vendor authenticity. The source drive is unchanged.
-3. Windows starts. Open the `FLATOUTGAME` CD in File Explorer and run **install-gog.cmd**.
+3. Windows starts. Updated guests attempt installation at Player login. On an older guest, or
+   for explicit retry, open the `FLATOUTGAME` CD in File Explorer and run **install-gog.cmd**.
    Approve the Windows Yes/No elevation request. New VMs use an administrator Player account;
    no generated guest password should be required. Older standard-Player VMs require migration
    or a fresh VM before this flow works without a password. Do not disable UAC to work around it.
@@ -220,12 +260,22 @@ unattended media. The launcher refuses media changes while Windows is running.
    scripts still require signatures. The separate GOG installer signature check remains.
 5. Check the helper's result and logs under `C:\ProgramData\FlatOut2VM\install-<run-id>`.
    Failed runs retain their payload for diagnosis. Successful runs remove that payload and
-   create a public **FlatOut 2** desktop shortcut. Launch it as Player, not VMAdmin.
+    create public Play, Retry, and diagnostic shortcuts. The unelevated parent launches the game
+    only after validating the successful result and receipt. A required restart defers launch
+    until a later Windows boot; no automatic reboot is requested. Launch as Player, not VMAdmin.
 
 The host command cannot observe the guest result and does not claim installation success.
-Rerunning the helper skips reinstallation only when the installer receipt and game executable
-hash match. Installation success does not prove gameplay, sound, saves, or LAN operation.
-GOG and Steam inside Windows appear as planned menu options but are not automated yet.
+Rerunning the helper skips payload staging/reinstallation only when the schema-2 receipt binds
+both payload files and the game executable hash, with a matching protected success result.
+Installation success does not prove gameplay, sound, saves, or LAN operation.
+Authenticated GOG and Steam routes are outside the current delivery scope and are not offered
+in the source menu.
+
+If repair finds an intentionally Player-writable Savegame tree, it preserves that tree outside
+the installer destination under `C:\Games\FlatOut2-saves-<GUID>\Savegame`. Its location appears
+in the result/report. Restoration is manual, as unelevated Player with the game closed; never
+run an elevated recursive copy from writable saves. Keep the archive and stopped VM until
+restoration is verified. Native Windows repair/archive behavior still requires runtime testing.
 
 After success, shut down Windows and remove only the temporary game CD:
 
@@ -235,39 +285,29 @@ python3 flatout2_vm.py detach-game
 
 This preserves setup CDs, the guest disk, saves, and USB source files. If attachment failed
 after creating `Data/game.iso`, preserve it for diagnosis; it is not silently overwritten.
+`detach-game` offers explicit quarantine of an orphan ISO so that setup can be retried without
+deleting that evidence. After verified ISO creation, the original source folder is no longer
+needed; eject an external source drive in Finder when convenient. This does not detach the
+virtual CD. See the [cleanup guide](docs/cleanup.md) for permanent VM removal and save backup.
 
-## Finish graphics and store setup (currently manual)
+## Graphics test prerequisite (not automated)
 
-1. Install the [official UTM Windows guest tools](https://docs.getutm.app/guest-support/windows/)
-   inside the VM. Enable the experimental 3D driver. UTM recommends a fresh Windows installation.
-   Do not attach an unverified guest-tools ISO before Windows setup; UTM documents possible
-   Windows setup black screens with some driver/image combinations.
-2. Keep UTM's renderer at Default or ANGLE (Metal). DirectX driver must not be Disabled.
-   Without Rosetta, UTM 5.0.8 can fall back to DXMT. No host Rosetta installation is performed here.
-3. Run Windows Update and verify Defender is enabled.
-4. Download your GOG offline installer inside the guest, or use the Steam helper below.
-5. In an elevated Windows PowerShell window, run the helper from the `FLATOUTSETUP` CD:
+The launcher does not install the accelerated graphics driver. Microsoft Basic Display Driver
+is not a gameplay-ready result. A separate local test used the graphics-only signed
+[v0.5 ARM64X package](https://github.com/osy/kvm-guest-drivers-windows/releases/tag/v0.5),
+driver **100.6.101.58000**, and passed a 32-bit D3D9 probe plus racing with NoSound.
+Pinned package and runtime evidence are recorded in [verification state](docs/state.md).
 
-   ```powershell
-   # Substitute the CD drive letter; no execution-policy change is required by this guide.
-   & 'E:\guest-setup.ps1' -Store Steam
-   # Or:
-   & 'E:\guest-setup.ps1' -Store GOG -GogInstaller 'C:\Users\VMAdmin\Downloads\setup_flatout_2.exe'
-   ```
+Do not install the complete guest-tools suite: sharing agents are outside this flow's isolation
+contract. Until graphics-only provisioning has a reviewed delivery path, the second-machine
+tester should report installation/UX separately from blocked gameplay validation. Do not
+substitute arbitrary drivers or DLL packs, disable signature enforcement, or claim that a
+DirectX feature list proves the game works. Keep Windows Update and Defender enabled.
 
-   Installer signatures must validate against Valve or GOG. Installation wizards and Steam
-   authentication remain interactive. If script execution is blocked, inspect the script and
-   follow your Windows execution-policy rules; do not globally disable protection.
-6. Sign out of VMAdmin and play as Player. In Steam, sign in as Player and install app **2990**.
-   For GOG, install to `C:\Games\FlatOut2`, outside the administrator's profile.
-7. Shut down Windows, detach installation CDs in UTM, and take a clean snapshot using UTM.
-   Delete seed files and rotate initial passwords after setup if required by your threat model.
+Preserve a stopped VM copy before graphics experiments. Do not rely on suspend snapshots:
+UTM refused saved-state suspension with the accelerated display device in the local test.
 
-FlatOut 2 needs DirectX 9. UTM advertises experimental DirectX 11/12 support, which does **not**
-prove this game works. Do not install arbitrary DLL packs or disable Defender to make it run.
-Any required guest-only translation layer must be selected and tested before declaring support.
-
-## LAN on normal Wi-Fi
+## LAN on normal Wi-Fi (deferred, not part of flash-drive acceptance)
 
 1. Shut down the VM. In its UTM network settings choose **Bridged**, selecting the physical
    Wi-Fi/Ethernet interface, not a VPN. Keep folder, clipboard, and USB sharing disabled.
@@ -298,10 +338,9 @@ The `.command` launchers wrap these commands. Setup prompts for explicit Windows
 it does not silently accept it. The Play launcher starts the registered VM.
 If it is already running, use its existing window rather than starting another instance.
 
-To remove: shut down the guest, remove its registration in UTM, then remove only the dedicated
-state directory after backing up needed saves. This also removes local credentials and media.
-The separately cached Windows ISO remains; remove its exact hash-named file to reclaim that space.
-Never point cleanup commands at a parent directory or use UTM deletion on unrelated VMs.
+For removal, follow [Finished playing?](docs/cleanup.md). Make and verify any wanted backup
+**before removing the VM from UTM**: that action may delete its data as well as its list entry.
+The guide covers saves, remaining setup files, optional download-cache cleanup, and custom paths.
 
 ## Disposable guests and Tiny11
 

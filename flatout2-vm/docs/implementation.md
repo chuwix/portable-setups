@@ -2,6 +2,22 @@
 
 ## Scope
 
+### Current delivery override: flash drive only
+
+User narrowed scope to finalizing the flash-drive flow for separate-machine testing.
+Continue in the existing approved worktree, no ticket. Preserve existing implementation and
+VM data; no further local VM/audio experiments. User subsequently explicitly approved commit,
+push, and merge as an experimental candidate, with runtime blockers retained.
+
+- AC-6 now offers USB detection and explicit folder selection only. Authenticated GOG/Steam
+  delivery in AC-9 and the earlier four-option roadmap are deferred, not completed.
+- README owns setup, first-login UAC, failure/retry, stopped/running Play, and cleanup guidance.
+- `docs/testing.md` owns the independent-machine runtime checklist and known blockers.
+- Keep strict installer exit/receipt gates and isolation. The known GOG crash is not success.
+- Graphics automation remains an explicit delivery gap; do not recommend full guest tools.
+- Verify offline regressions and source review, then hand off runtime acceptance. No claim of
+  end-to-end completion until the separate machine passes the required checks.
+
 Continue the experimental Apple Silicon setup on `feat/flatout2-vm` in the existing worktree.
 No reference ticket. Keep changes local until publishing is explicitly approved.
 Users must not need host accessibility or screen-recording permissions. Store authentication
@@ -128,10 +144,72 @@ Local commits are authorized; publishing still requires explicit approval.
   public Player shortcut. Host Play integration remains deferred, not implemented.
 - `test_game_media.py`: discovery/completeness/ambiguity, copy verification, allowlisted media,
   running/uninstalled VM refusal, config rollback, attach/detach preservation, and helper guards.
+- Media recovery hardening: reject a symlink at the bundle root before reading state. When
+  `Data/game.iso` exists without an attached drive, `detach-game` asks for explicit confirmation
+  and quarantines it as `Data/game-orphan-<UUID>.iso`, preserving evidence. Recheck stopped state
+  and unchanged configuration after confirmation. Reject non-file media and unrecognized drive
+  configurations. Tests cover cancellation, name collisions, failed reload recovery, changing
+  status/configuration during copy, missing backing files, and preservation of other state.
 - Source docs: current Inno flags/exit-code references via Context7 `/jrsoftware/issrc`, and UTM
   stopped configuration reload via `/websites/getutm_app`; runtime compatibility still required.
 
 ### Verification and rollback
+
+### Approved first-run UX continuation
+
+User approved the proposed UX slice, adding end-of-use removal guidance. Continue in the
+existing worktree, no ticket, local commits only, no push. Split implementation into parallel
+host orchestration and guest dispatcher units with disjoint file ownership; coordinator owns
+documentation, integration review, and serial VM experiments.
+
+- AC-12: Fresh setup confirms USB/folder source and verifies game ISO before first boot.
+  Installed-GPT attachment restriction remains for existing VMs. Announce after ISO readback
+  that the source is no longer needed; user ejects external volumes in Finder.
+- AC-13: A bounded, unelevated Player-login dispatcher attempts installation once per media
+  identity, requests normal Yes/No UAC, and exits. Denial/failure requires explicit Retry.
+  No service, polling listener, host command channel, saved execution-policy change, or
+  elevated game launch. Successful installation launches only through the unelevated parent.
+- AC-14: Later Player logins launch a receipt-validated game once. Already-running host Play
+  focuses Windows and explains guest shortcut use; never claims actual game launch.
+  Missing/suspended/transitional VM states receive actionable guidance without media writes.
+- AC-15: Receipts bind schema, both payload files/sizes/hashes, game hash/path, run ID and
+  installer exit. Crash cannot publish success; restart-required results defer launch.
+  Receipt-matching retry skips payload staging. Logs/results remain guest-local.
+- AC-16: README and setup-completion guidance link an end-of-use cleanup guide. Distinguish
+  normal shutdown, installer-media cleanup, and permanent VM removal. Warn that deleting VM
+  loses game saves/Windows state; explain preserving the stopped VM before removal. Identify
+  exact state/cache locations, custom-home handling, UTM registration, and any host-wide
+  preferences. Preserve source installers, unrelated files, other VMs, and shared prerequisites.
+  Adding guidance does not authorize deleting the current VM or implementing automatic deletion.
+
+Host unit owns flatout2_vm.py and Python orchestration/media tests. Guest unit owns
+guest-start.cmd/ps1, guest-install.ps1 (shared contract), install-gog.cmd/ps1,
+prepare-guest.cmd, guest-status.cmd and a dedicated guest-flow test module. Host stages
+all helpers on seed/game CDs; guest source allowlist must match host ISO verification.
+Coordinator owns README, docs/cleanup.md, implementation.md/state.md.
+
+Verification: full offline unittest suite, shell syntax, PowerShell parser/behavior checks
+where available, independent read-only review; runtime fresh-VM/UAC/Play/media detach checks
+remain separate. Existing working VM/saves stay preserved; installer crash remains failed.
+Roll back via scoped source changes and separate fresh VM home, not restoring unattended
+media over a partitioned disk. Audio experiment remains excluded from launcher defaults.
+
+### Fresh audio candidate (user-directed performance investigation)
+
+User explicitly requests a fresh VM with sound from first boot and no routine diagnostics.
+Candidate home: `~/Library/Application Support/FlatOut2VM-fresh-audio`; preserve all older
+VMs/saves/evidence. Add `setup --stage-only` so verified setup can return before registration
+or boot; reject this option for installed GPT homes and non-setup actions. Eligible blank
+retries must not register or boot in stage-only mode. Normal production audio audit remains
+unchanged. Tests prove no open/start on stage-only paths and account/disk preservation.
+
+Coordinator then configures only this stopped candidate for exactly one intel-hda controller,
+DebugLog false, and deferred verified game CD. Keep CoreAudio preference 2 and local-only UTM
+launch, check all other isolation fields against audited configuration. Windows first boots
+with sound; check desktop/playback responsiveness and no recording endpoint before graphics
+and game. Install only pinned signed graphics package, never sharing-capable guest tools.
+Keep source/license prompts in the actual launcher. New helpers remain subject to independent
+review and Windows runtime checks; no claim that fresh sound is a proven fix.
 
 Use the existing offline suite and `git diff --check`, then run the local user-facing launcher.
 Verify installation and Play without host control permissions. Keep the previous working VM

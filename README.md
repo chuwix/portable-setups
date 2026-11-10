@@ -5,7 +5,7 @@ your personal machine configuration. Projects do not require Nix.
 
 | Project | Platform | Status |
 | --- | --- | --- |
-| [FlatOut 2 VM](flatout2-vm/) | Apple Silicon macOS, UTM | Experimental prototype; gameplay and LAN unverified |
+| [FlatOut 2 VM](flatout2-vm/) | Apple Silicon macOS, UTM | Flash-drive install test candidate; fresh E2E pending |
 
 ## Use a project
 
@@ -18,21 +18,25 @@ one-click setup. Check the project's status before using it.
 
 ### Test the FlatOut 2 prototype
 
-The prototype currently lives on the `feat/flatout2-vm` branch, not `main`.
+The experimental test candidate is available on `main`.
 On an Apple Silicon Mac with Terminal, Homebrew, and Git available:
 
 ```sh
-git clone --branch feat/flatout2-vm --single-branch https://github.com/chuwix/portable-setups.git
-cd portable-setups
-./flatout2-vm/setup-flatout2.command
+git clone https://github.com/chuwix/portable-setups.git
+cd portable-setups/flatout2-vm
+./setup-flatout2.command --home "$HOME/Library/Application Support/FlatOut2VM-usb-test"
 ```
 
-Alternatively, select that branch on GitHub, download its source ZIP, extract it, and open
+Alternatively, download the main branch source ZIP on GitHub, extract it, and open
 `flatout2-vm/setup-flatout2.command`. macOS may require permission to open downloaded scripts.
 Read [the project's prerequisites and limitations](flatout2-vm/) first. The launcher asks for
-Windows license acceptance, then downloads its pinned ISO. Before that it installs missing UTM
+Windows license acceptance and a supported GOG offline installer on your flash drive, then
+downloads its pinned ISO. Before that it installs missing UTM
 and Python through Homebrew, or upgrades an outdated Homebrew-managed UTM. Nix-managed Homebrew
 is left unchanged. No ISO path or checksum entry is needed.
+
+Use the [second-machine checklist](flatout2-vm/docs/testing.md) and record the exact revision
+tested. Authenticated GOG/Steam, LAN, and audio are outside the current test scope.
 
 Do not upload Windows images, purchased game files, populated virtual machines, credentials,
 license keys, or personal configuration. Scripts must not execute a game installer on the host
