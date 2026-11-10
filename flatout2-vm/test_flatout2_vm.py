@@ -173,6 +173,27 @@ class BootMediaTests(unittest.TestCase):
 
 
 class UnattendedTests(unittest.TestCase):
+    def test_privacy_defaults_precede_network_and_disable_express_settings(self) -> None:
+        root = ET.fromstring(vm.unattended("a", "b"))
+        ns = {"u": vm.NS}
+        self.assertEqual(root.findtext(".//u:OOBE/u:ProtectYourPC", namespaces=ns), "3")
+        command = root.findtext(".//u:RunSynchronousCommand/u:Path", namespaces=ns)
+        self.assertLessEqual(len(command), 259)
+        self.assertIn("prepare-guest.cmd", command)
+        wrapper = Path(__file__).with_name("prepare-guest.cmd").read_text()
+        self.assertLess(wrapper.index("configure-privacy.cmd"), wrapper.index("install-network.cmd"))
+        self.assertIn("if errorlevel 1 exit /b 10", wrapper)
+        script = Path(__file__).with_name("configure-privacy.cmd").read_text()
+        for name, value in (("DisableLocation", 1), ("AllowFindMyDevice", 0),
+                            ("DisabledByGroupPolicy", 1), ("AllowTelemetry", 1),
+                            ("AllowInputPersonalization", 0),
+                            ("DisableTailoredExperiencesWithDiagnosticData", 1),
+                            ("DisablePrivacyExperience", 1)):
+            self.assertIn(f"{name} {value}", script)
+        self.assertLess(script.index("DisableTailoredExperiencesWithDiagnosticData"),
+                        script.index("DisablePrivacyExperience"))
+        self.assertIn("reg unload HKU\\FlatOut2Default", script)
+
     def test_oobe_uses_us_locale_and_keyboard(self) -> None:
         root = ET.fromstring(vm.unattended("a", "b"))
         ns = {"u": vm.NS}
@@ -188,7 +209,8 @@ class UnattendedTests(unittest.TestCase):
         driver = root.find("u:settings[@pass='specialize']/u:component[@name='Microsoft-Windows-Deployment']", ns)
         command = driver.findtext(".//u:Path", namespaces=ns)
         self.assertIn("flatout2-seed.tag", command)
-        self.assertIn("install-network.cmd", command)
+        self.assertIn("prepare-guest.cmd", command)
+        self.assertLessEqual(len(command), 259)
         self.assertIn("exit $LASTEXITCODE", command)
         self.assertEqual(driver.findtext(".//u:WillReboot", namespaces=ns), "OnRequest")
         self.assertNotIn("Bypass", command)
@@ -213,7 +235,41 @@ class UnattendedTests(unittest.TestCase):
         self.assertEqual(values["VMAdmin"], ("Administrators", 'admin<&"'))
         for component in root.findall(".//u:component", ns):
             self.assertEqual(component.attrib["processorArchitecture"], "arm64")
-        self.assertIsNone(root.find(".//u:AutoLogon", ns))
+        login = root.find(".//u:AutoLogon", ns)
+        self.assertEqual(login.findtext("u:Username", namespaces=ns), "Player")
+        self.assertEqual(login.findtext("u:Enabled", namespaces=ns), "true")
+        self.assertEqual(login.findtext("u:LogonCount", namespaces=ns), "999")
+        self.assertEqual(login.findtext("u:Password/u:Value", namespaces=ns), 'player<&"')
+
+    def test_startup_diagnostics_need_no_elevation_or_host_sharing(self) -> None:
+        wrapper = Path(__file__).with_name("prepare-guest.cmd").read_text()
+        self.assertIn('%ProgramFiles%\\FlatOut2VM\\guest-status.cmd', wrapper)
+        self.assertIn('%ProgramData%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup', wrapper)
+        self.assertLess(wrapper.index("guest-status.cmd"), wrapper.index("install-network.cmd"))
+        script = Path(__file__).with_name("guest-status.cmd").read_text()
+        self.assertIn('if /i not "%USERNAME%"=="Player" exit /b 0', script)
+        self.assertIn('%LOCALAPPDATA%\\FlatOut2VM', script)
+        self.assertIn('Game compatibility is NOT verified', script)
+        self.assertIn('dxdiag.exe', script)
+        self.assertIn('Startup run ID:', script)
+        self.assertIn('Refusing stale results.', script)
+        self.assertIn('/c:"Card name:"', script)
+        self.assertLess(script.index('del "%OUT%\\dxdiag.txt"'), script.index('dxdiag.exe'))
+        for forbidden in ('runas', 'ExecutionPolicy', 'net user', 'reg add', 'http://', 'https://'):
+            self.assertNotIn(forbidden, script)
+
+    def test_seed_contains_all_guest_startup_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            seed, data = Path(directory) / "seed", Path(directory) / "data"
+            seed.mkdir()
+            data.mkdir()
+            def make_iso(command: list[str]) -> str:
+                Path(command[command.index("-o") + 1]).write_bytes(b"iso")
+                return ""
+            with patch.object(vm, "run", side_effect=make_iso):
+                vm.write_seed(seed, data)
+            for name in ("prepare-guest.cmd", "configure-privacy.cmd", "install-network.cmd", "guest-status.cmd"):
+                self.assertEqual((seed / name).read_bytes(), Path(__file__).with_name(name).read_bytes())
 
     def test_installs_only_on_guest_disk_zero_without_bypasses(self) -> None:
         xml = vm.unattended("a", "b")

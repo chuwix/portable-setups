@@ -10,13 +10,15 @@ Implemented: generation of a dedicated Windows 11 ARM UTM bundle, sparse 80 GiB 
 read-only installation media, unattended Windows answer file, separate administrator and
 standard player accounts, configuration audit, and guest-side GOG/Steam installation helper.
 
-Not verified: UTM importing and booting this generated bundle, unattended Windows setup,
-guest drivers, DirectX 9 gameplay, sound, save persistence, or LAN discovery. These are release
-blockers. Automated guest-tools installation, game installation, and game launch are not yet
-implemented. The Play shortcut currently starts the VM, not the game.
+Observed locally on UTM 5.0.8: unattended installation to the Windows sign-in screen,
+automatic NetKVM installation, outbound networking, intended privacy registry values,
+Player desktop after sign-in, and a normal reboot with networking preserved.
+The installed display driver is Microsoft Basic Display Driver, not validated acceleration.
 
-Runtime validation with UTM 5.0.8 or later is outstanding. Offline tests do not establish game
-compatibility or security isolation at runtime.
+New native Player auto-login and startup diagnostics still need a fresh-install test.
+Experimental graphics, DirectX 9 gameplay, sound, saves, and LAN discovery remain release
+blockers. Game installation and launch are not automated. The Play shortcut starts the VM,
+not the game. Local validation is not a published-repository E2E pass or proof of isolation.
 
 ## Security boundary
 
@@ -33,6 +35,8 @@ guarantee safety against hypervisor, graphics-driver, or network vulnerabilities
 - Audio is disabled until output-only operation is verified, rather than risk enabling microphone capture.
 - Generated passwords and the unattended answer file are stored locally with private permissions.
   They also exist on the seed ISO and may be cached by Windows Setup. Do not reuse them elsewhere.
+- Player automatic login stores its guest password in Windows and removes the guest login barrier.
+  Anyone who can start or read the VM can access Player's data. VMAdmin never logs in automatically.
 - The launch audit checks configuration, not the running guest, hypervisor integrity, or malware.
 
 Keep UTM and Windows updated, leave Defender enabled, and play as **Player**, not **VMAdmin**.
@@ -116,7 +120,19 @@ before OOBE. No CD drive letter is assumed. Windows signature enforcement stays 
 Results are written to `C:\Windows\Panther\flatout2-network.log`; missing media or a failed
 installation fails the command rather than silently continuing. A requested reboot is handed
 to Windows Setup. This path replaces WinPE configuration-set staging, which copied no drivers
-in the observed Windows 11 25H2 installation. Runtime validation remains pending.
+in the observed Windows 11 25H2 installation. The specialize path subsequently installed NetKVM
+successfully in the local Windows test, with exit code 0 and working outbound networking.
+
+Before network installation, the same guest-only `specialize` step applies privacy policies:
+location, Find my device, advertising ID, online speech personalization, and tailored
+experiences are disabled; diagnostics are limited to required data on Windows 11 Pro.
+The tailored-experiences policy is seeded into the default user profile for new accounts.
+Only after those writes succeed is the privacy-choice screen suppressed with
+`DisablePrivacyExperience`. The answer file also sets `ProtectYourPC=3` to disable Express
+settings. Failures are logged to `C:\Windows\Panther\flatout2-privacy.log` and fail the setup
+command. This is not a zero-telemetry guarantee and does not disable Defender or updates.
+The privacy screen was skipped in the local test, and all seven policy values were checked
+after Player sign-in. These settings do not change existing VMs.
 
 The setup never recreates an existing guest disk. A retry refreshes seed media only when UTM
 reports the VM stopped and the first MiB of its raw guest disk is still zero-filled. Any
@@ -131,10 +147,8 @@ keypress-required EFI boot image in the VM-local ISO copy with Microsoft's bundl
 entry before writing, then reads back the replacement. The cached download stays unchanged.
 The system disk precedes both CDs in UTM's drive list, which determines QEMU boot priority.
 An empty disk should fall through to the no-prompt installer; subsequent restarts should boot
-the installed system. First boot without a keypress has been observed, but the combined
-disk-first installation and restart path still requires a fresh runtime test. US English locale
-and a single US keyboard are configured for both Windows Setup and OOBE. OOBE locale selection
-and automatic network-driver installation still require a fresh runtime test. Image selection,
+the installed system. This boot/restart path reached sign-in in the local test. US English locale
+and a single US keyboard are configured for both Windows Setup and OOBE. Image selection,
 disk partitioning, and account creation are preconfigured. Current Windows builds may still
 show OOBE/license/account screens. Do not bypass security checks to suppress them.
 
@@ -142,8 +156,23 @@ No UEFI shell script is required. If the VM remains at
 `Shell>`, that is a failed boot test, not a Windows or PowerShell script failure. Do not format
 anything or recreate the VM to troubleshoot it; preserve the state for diagnosis.
 
-Use the generated `credentials.json` to sign into VMAdmin for initial setup. An interrupted
-attempt is retained for diagnosis; it is not silently deleted or overwritten.
+### Automatic Player startup (runtime test pending)
+
+New VMs configure Windows-native automatic login as the standard **Player** account. No host
+accessibility or screen-recording permission is required. Privileged preparation runs during
+Windows Setup, not through an elevated Player session. Automatic login is bounded: the answer
+file requests 999 logons; Windows documents an off-by-one issue in this setting. After that,
+use the generated `credentials.json` to sign in. This does not modify existing installations.
+
+At each Player login, a guest-only diagnostic runs from `C:\Program Files\FlatOut2VM` and opens
+`%LOCALAPPDATA%\FlatOut2VM\status.txt`. A `dxdiag.txt` report is written beside it. The report
+includes account, network configuration, and display-driver information, but never declares
+the game ready merely because Windows booted. It uses no network downloads, sharing agents,
+host scripting, or elevation. Store sign-in and game installation remain separate.
+
+Windows Setup installs the diagnostic and its common Startup entry before Player login.
+The entry ignores other accounts. Failed setup attempts are preserved for diagnosis, not
+silently deleted or overwritten. Use **VMAdmin** credentials only when administration is needed.
 
 ## Finish guest setup (currently manual)
 

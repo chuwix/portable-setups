@@ -300,10 +300,10 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
     command = child(child(deployment, "RunSynchronous"), "RunSynchronousCommand")
     command.set("{http://schemas.microsoft.com/WMIConfig/2002/State}action", "add")
     child(command, "Order", "1")
-    child(command, "Description", "Install pinned ARM64 network driver before OOBE")
+    child(command, "Description", "Apply privacy defaults and install ARM64 networking before OOBE")
     child(command, "Path", 'powershell.exe -NoProfile -NonInteractive -Command "'
           "$m=@(Get-PSDrive -PSProvider FileSystem | Where-Object {Test-Path ($_.Root+'flatout2-seed.tag')}); "
-          "if($m.Count -ne 1){exit 10}; & ($m[0].Root+'install-network.cmd'); exit $LASTEXITCODE\"")
+          "if($m.Count -ne 1){exit 10}; & ($m[0].Root+'prepare-guest.cmd'); exit $LASTEXITCODE\"")
     child(command, "WillReboot", "OnRequest")
     oobe = ET.SubElement(root, f"{{{NS}}}settings", {"pass": "oobeSystem"})
     locale = component(oobe, "Microsoft-Windows-International-Core")
@@ -311,6 +311,14 @@ def unattended(admin_password: str, gamer_password: str) -> bytes:
                        ("UILanguage", "en-US"), ("UserLocale", "en-US")):
         child(locale, key, value)
     shell = component(oobe, "Microsoft-Windows-Shell-Setup")
+    child(child(shell, "OOBE"), "ProtectYourPC", "3")
+    autologon = child(shell, "AutoLogon")
+    child(autologon, "Enabled", "true")
+    child(autologon, "Username", "Player")
+    child(autologon, "LogonCount", "999")
+    password = child(autologon, "Password")
+    child(password, "Value", gamer_password)
+    child(password, "PlainText", "true")
     accounts = child(child(shell, "UserAccounts"), "LocalAccounts")
     for name, group, password in (
         ("VMAdmin", "Administrators", admin_password),
@@ -401,6 +409,9 @@ def write_seed(seed: Path, data: Path) -> None:
     (seed / "startup.nsh").unlink(missing_ok=True)
     (seed / "flatout2-seed.tag").write_text("portable-setups FlatOut 2 installation media\n")
     shutil.copyfile(Path(__file__).with_name("install-network.cmd"), seed / "install-network.cmd")
+    shutil.copyfile(Path(__file__).with_name("configure-privacy.cmd"), seed / "configure-privacy.cmd")
+    shutil.copyfile(Path(__file__).with_name("prepare-guest.cmd"), seed / "prepare-guest.cmd")
+    shutil.copyfile(Path(__file__).with_name("guest-status.cmd"), seed / "guest-status.cmd")
     shutil.copyfile(Path(__file__).with_name("guest-setup.ps1"), seed / "guest-setup.ps1")
     temporary = data / f"seed-{uuid.uuid4()}.iso"
     try:
