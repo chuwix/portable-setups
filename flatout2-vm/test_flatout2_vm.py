@@ -519,15 +519,20 @@ class HostFlowTests(unittest.TestCase):
                 iso.touch()
                 args = argparse.Namespace(home=home, source_dir=root, accept_windows_license=True, cache=root)
                 registered = False
+                pending_status = 0
                 opens: list[list[str]] = []
 
                 def command(command: list[str]) -> str:
-                    nonlocal registered
+                    nonlocal registered, pending_status
                     if command[0] == '/usr/bin/open':
                         opens.append(command)
                         registered = True
+                        pending_status = 2
                         return ''
                     self.assertEqual(command[1], 'status')
+                    if pending_status:
+                        pending_status -= 1
+                        raise ValueError('utmctl failed (exit 1): Virtual machine not found.')
                     if not registered:
                         raise ValueError('utmctl failed (exit 1): Virtual machine not found.')
                     return 'stopped'
@@ -546,7 +551,8 @@ class HostFlowTests(unittest.TestCase):
                         patch.object(vm, 'acquire_iso', return_value=iso), patch.object(vm, 'download_iso', return_value=iso), \
                         patch.object(vm, 'stage_network_driver', side_effect=network), patch.object(vm, 'prepare_windows_media'), \
                         patch.object(vm, 'write_seed'), patch.object(vm, 'run', side_effect=command), \
-                        patch.object(vm, 'reload_vm'), patch.object(vm, 'start_setup_vm') as start:
+                        patch.object(vm, 'reload_vm'), patch.object(vm.time, 'sleep'), \
+                        patch.object(vm, 'start_setup_vm') as start:
                     with patch.object(vm, 'build_game_media', side_effect=fail_build):
                         with self.assertRaisesRegex(ValueError, 'staging interrupted'):
                             vm.setup(args)
@@ -621,6 +627,44 @@ class HostFlowTests(unittest.TestCase):
 
 
 class PrerequisiteTests(unittest.TestCase):
+    def test_setup_waits_for_registration_before_start(self) -> None:
+        vm_id = str(vm.uuid.uuid4())
+        missing = ValueError('utmctl failed (exit 1): Virtual machine not found.')
+        with patch.object(vm, 'run', side_effect=['', missing, missing, 'stopped', '']) as run, \
+                patch.object(vm.time, 'sleep') as sleep:
+            vm.start_setup_vm(Path('/prepared/test.utm'), vm_id)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual([call.args[0][1] for call in run.call_args_list],
+                         ['-a', 'status', 'status', 'status', 'start'])
+        self.assertEqual(run.call_args_list[-1].args[0][-1], vm_id.upper())
+
+    def test_registration_timeout_preserves_home_and_never_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / 'test.utm'
+            bundle.mkdir()
+            marker = bundle / 'preserved'
+            marker.write_bytes(b'original state')
+            def command(args: list[str]) -> str:
+                if args[0] == '/usr/bin/open':
+                    return ''
+                self.assertEqual(args[1], 'status')
+                raise ValueError('Virtual machine not found.')
+            with patch.object(vm, 'run', side_effect=command) as run, patch.object(vm.time, 'sleep') as sleep:
+                with self.assertRaisesRegex(ValueError, 'same --home'):
+                    vm.start_setup_vm(bundle, str(vm.uuid.uuid4()))
+            self.assertEqual(run.call_count, 62)
+            self.assertEqual(sleep.call_count, 60)
+            self.assertEqual(marker.read_bytes(), b'original state')
+
+    def test_registration_other_errors_and_nonstopped_state_never_start(self) -> None:
+        for result in (ValueError('Automation permission denied'), 'started', 'paused'):
+            with self.subTest(result=result), patch.object(vm, 'run', side_effect=['', result]) as run, \
+                    patch.object(vm.time, 'sleep') as sleep:
+                with self.assertRaises(ValueError):
+                    vm.start_setup_vm(Path('/prepared/test.utm'), str(vm.uuid.uuid4()))
+                self.assertEqual(run.call_count, 2)
+                sleep.assert_not_called()
+
     def test_unregistered_retry_never_opens_partitioned_or_unaudited_bundle(self) -> None:
         for unsafe in ('partitioned', 'sharing', 'status-error'):
             with self.subTest(unsafe=unsafe), tempfile.TemporaryDirectory() as directory:
