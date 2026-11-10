@@ -1,0 +1,11 @@
+worktrees/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.iso
+*.raw
+*.qcow2
+*.vhdx
+*.utm/
+credentials.json
+Autounattend.xml
