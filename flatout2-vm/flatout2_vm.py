@@ -31,6 +31,7 @@ WINDOWS_URL = (
 )
 WINDOWS_SHA256 = "32cde0071ed8086b29bb6c8c3bf17ba9e3cdf43200537434a811a9b6cc2711a1"
 DEFAULT_CACHE = Path.home() / "Library/Caches/portable-setups/flatout2-vm"
+GAME_HELPERS = ("install-gog.cmd", "install-gog.ps1", "guest-start.cmd", "guest-start.ps1", "guest-install.ps1")
 EFI_PROMPT_SHA256 = "0be1d959458b3a83ba84c7f58b1f4d0ca080abccecd53eae157c8d2f9bff2f98"
 EFI_NOPROMPT_SHA256 = "70eedc9e6a37f7ac688ed9b3eefe48ec26156e48cda669e520ccaad44130d113"
 DRIVERS_URL = "https://github.com/utmapp/qemu/releases/download/v10.0.2-utm/utm-guest-tools-0.1.271.iso"
@@ -378,17 +379,28 @@ def audit(config: dict[str, Any]) -> None:
         raise ValueError("Shared networking must enable host isolation.")
 
 
-def refresh_seed(destination: Path) -> None:
+def retry_status(vm_id: str) -> str | None:
+    """Distinguish missing registration from other status-query failures."""
+    try:
+        return run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id])
+    except ValueError as error:
+        if "Virtual machine not found" not in str(error):
+            raise
+        return None
+
+
+def refresh_seed(destination: Path, source_dir: Path | None = None, stage_only: bool = False) -> None:
     """Refresh installer media only for a stopped VM whose disk is unpartitioned."""
     bundle = destination / f"{NAME}.utm"
-    if destination.is_symlink() or any(p.is_symlink() for p in destination.rglob("*")):
+    if any(p.is_symlink() for p in (destination, *destination.parents, bundle)) or any(p.is_symlink() for p in destination.rglob("*")):
         raise ValueError("Refusing setup state containing symlinks.")
-    with (bundle / "config.plist").open("rb") as source:
-        config = plistlib.load(source)
+    config_path = bundle / "config.plist"
+    original = config_path.read_bytes()
+    config = plistlib.loads(original)
     audit(config)
     vm_id = utm_id(config["Information"]["UUID"])
-    status = run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id])
-    if status != "stopped":
+    status = retry_status(vm_id)
+    if status is not None and status != "stopped":
         raise ValueError("Shut down the VM before retrying setup; its disk will not be changed.")
     data = bundle / "Data"
     with (data / "system.raw").open("rb") as disk:
@@ -400,9 +412,47 @@ def refresh_seed(destination: Path) -> None:
         raise ValueError("Original unattended file is missing; refusing to regenerate accounts.")
     if not (seed / "drivers/NetKVM/netkvm.inf").is_file():
         raise ValueError("This older setup lacks staged network drivers. Use a fresh --home directory for the updated installer.")
+    if status is None and not stage_only:
+        # Opening a .utm bundle registers/selects it, without issuing a start.
+        # Only audited, still-blank retry state is eligible for this recovery.
+        if config_path.read_bytes() != original:
+            raise ValueError("Configuration changed before retry registration; refusing to open the VM.")
+        run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
+        if run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id]) != "stopped":
+            raise ValueError("Retry VM was not registered and stopped. Check UTM, shut down Windows normally, then retry setup.")
+        with (data / "system.raw").open("rb") as disk:
+            registered_header = disk.read(1024 * 1024)
+        if registered_header != header or config_path.read_bytes() != original:
+            raise ValueError("VM disk or configuration changed during retry registration; refusing unattended setup.")
+        status = "stopped"
+    attached = [d for d in config["Drive"] if d["ImageName"] == "game.iso"]
+    if attached and (len(attached) != 1 or attached[0]["ImageType"] != "CD"
+                     or attached[0]["Interface"] != "USB" or not attached[0]["ReadOnly"]):
+        raise ValueError("Unrecognized game.iso drive; preserve this home and use a fresh --home directory.")
+    media = data / "game.iso"
+    if media.exists():
+        # A previously published ISO may survive a failed config reload. Recheck it,
+        # never overwrite it or infer success from guest files.
+        verify_game_media(media)
+    else:
+        build_game_media(choose_installer(source_dir), media)
+    if not attached:
+        config["Drive"].append(game_drive())
+    audit(config)
+    if retry_status(vm_id) != status or config_path.read_bytes() != original:
+        raise ValueError("VM started or configuration changed during media preparation; refusing setup retry.")
     prepare_windows_media(data / "windows.iso")
     write_seed(seed, data)
+    with (data / "system.raw").open("rb") as disk:
+        current_header = disk.read(1024 * 1024)
+    if current_header != header or retry_status(vm_id) != status or config_path.read_bytes() != original:
+        raise ValueError("VM disk, state, or configuration changed during setup retry; refusing to boot unattended media.")
+    publish_configuration(bundle, vm_id, original, config, reload=not stage_only)
+    if stage_only:
+        setup_guidance(stage_only=True)
+        return
     start_setup_vm(bundle, vm_id)
+    setup_guidance()
 
 
 def write_seed(seed: Path, data: Path) -> None:
@@ -413,6 +463,8 @@ def write_seed(seed: Path, data: Path) -> None:
     shutil.copyfile(Path(__file__).with_name("prepare-guest.cmd"), seed / "prepare-guest.cmd")
     shutil.copyfile(Path(__file__).with_name("guest-status.cmd"), seed / "guest-status.cmd")
     shutil.copyfile(Path(__file__).with_name("guest-setup.ps1"), seed / "guest-setup.ps1")
+    for name in GAME_HELPERS:
+        shutil.copyfile(Path(__file__).with_name(name), seed / name)
     temporary = data / f"seed-{uuid.uuid4()}.iso"
     try:
         run(["/usr/bin/hdiutil", "makehybrid", "-iso", "-joliet", "-default-volume-name",
@@ -443,18 +495,24 @@ def setup(args: argparse.Namespace) -> None:
     firmware = UTM / "Contents/Resources/qemu/edk2-arm-secure-vars.fd"
     if not firmware.is_file():
         raise ValueError(f"UTM Secure Boot template is missing: {firmware}")
-    destination = args.home.expanduser().resolve()
+    destination = args.home.expanduser().absolute()
+    if any(p.is_symlink() for p in (destination, *destination.parents)):
+        raise ValueError("Refusing setup state containing symlinks.")
     if destination.exists():
         disk_path = destination / f"{NAME}.utm/Data/system.raw"
         if disk_path.is_file() and not disk_path.is_symlink():
             with disk_path.open("rb") as disk:
                 header = disk.read(8192)
             if header[512:520] == b"EFI PART" or header[4096:4104] == b"EFI PART":
+                if getattr(args, "stage_only", False):
+                    raise ValueError("--stage-only requires a blank setup disk; installed GPT guests must not be restaged.")
                 args.action = "install-game"
                 game_media(args)
                 return
-        refresh_seed(destination)
+        refresh_seed(destination, args.source_dir, stage_only=getattr(args, "stage_only", False))
         return
+    # Both Windows and game license consent precede downloads and VM creation.
+    installer = choose_installer(args.source_dir)
     iso = acquire_iso(args)
     driver_media = download_iso(DRIVERS_URL, DRIVERS_SHA256, args.cache, "UTM driver media (about 121 MiB)")
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -479,9 +537,45 @@ def setup(args: argparse.Namespace) -> None:
     (seed / "Autounattend.xml").write_bytes(unattended(admin, player))
     stage_network_driver(seed, driver_media)
     write_seed(seed, data)
+    config = first_boot_configuration(config, installer, data)
+    (bundle / "config.plist").write_bytes(plistlib.dumps(config))
     (destination / "vm-id").write_text(vm_id + "\n")
     print(f"VM prepared: {bundle}\nCredentials: {destination / 'credentials.json'}")
+    if getattr(args, "stage_only", False):
+        setup_guidance(stage_only=True)
+        return
     start_setup_vm(bundle, vm_id)
+    setup_guidance()
+
+
+def setup_guidance(stage_only: bool = False) -> None:
+    guide = Path(__file__).resolve().parent / "docs/cleanup.md"
+    if stage_only:
+        print("VM prepared, not started (--stage-only). No bundle open, registration, or start was requested.\n"
+              "Windows and game installation are not complete.\n"
+              f"Shutdown, installer-media cleanup, and permanent removal guide: {guide}\n"
+              "Permanent VM deletion loses game saves and Windows state. Preserve the stopped VM first.")
+        return
+    print("Windows setup has started; game installation is not complete. At Player login, the guest helper\n"
+          "attempts installation and asks for normal Windows Yes/No UAC consent. Check its result in Windows.\n"
+          "After denial or failure, use the guest Retry action; the host cannot verify success.\n"
+          f"Shutdown, installer-media cleanup, and permanent removal guide: {guide}\n"
+          "Permanent VM deletion loses game saves and Windows state. Preserve the stopped VM first.")
+
+
+def game_drive() -> dict[str, Any]:
+    return {"ImageName": "game.iso", "ImageType": "CD", "Interface": "USB",
+            "InterfaceVersion": 1, "Identifier": str(uuid.uuid4()), "ReadOnly": True}
+
+
+def first_boot_configuration(config: dict[str, Any], installer: Path, data: Path) -> dict[str, Any]:
+    """Construct fresh-VM media before registration, separate from installed-GPT attachment."""
+    if any(d["ImageName"] == "game.iso" for d in config["Drive"]):
+        raise ValueError("Fresh configuration already contains game media.")
+    build_game_media(installer, data / "game.iso")
+    config["Drive"].append(game_drive())
+    audit(config)
+    return config
 
 
 # The initial offline flow knows the complete file layout for this GOG build only.
@@ -547,11 +641,8 @@ def usb_roots() -> list[Path]:
 
 def choose_installer(source: Path | None) -> Path:
     if source is None:
-        print("Game source:\n  1. Detect GOG offline installer on USB\n  2. Select installer folder\n"
-              "  3. GOG inside Windows (not automated yet)\n  4. Steam inside Windows (not automated yet)")
-        choice = input("Choose [1-4]: ").strip()
-        if choice in ("3", "4"):
-            raise ValueError("Authenticated store routes are not implemented yet. Use a GOG offline installer for this prototype.")
+        print("Game source:\n  1. Detect GOG offline installer on USB\n  2. Select installer folder")
+        choice = input("Choose [1-2] (Enter cancels): ").strip()
         if choice == "2":
             source = Path(input("Installer source folder (paste its path, without surrounding quotes): ").strip())
         elif choice != "1":
@@ -596,7 +687,7 @@ def build_game_media(installer: Path, output: Path) -> None:
                 raise ValueError(f"Installer copy checksum mismatch: {source.name}")
             manifest.append({"name": source.name, "size": target.stat().st_size, "sha256": expected})
         (stage / "game-media.json").write_text(json.dumps({"schema": 1, "files": manifest}, indent=2) + "\n")
-        for name in ("install-gog.cmd", "install-gog.ps1"):
+        for name in GAME_HELPERS:
             shutil.copyfile(Path(__file__).with_name(name), stage / name)
         temporary = Path(directory) / "game.iso"
         run(["/usr/bin/hdiutil", "makehybrid", "-iso", "-joliet", "-default-volume-name",
@@ -605,15 +696,50 @@ def build_game_media(installer: Path, output: Path) -> None:
         mount.mkdir()
         run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount), str(temporary)])
         try:
+            if {p.name for p in mount.iterdir()} != {*GOG_PARTS, "game-media.json", *GAME_HELPERS}:
+                raise ValueError("Built game ISO has unexpected or missing files.")
             for entry in manifest:
-                if file_hash(mount / entry["name"]) != entry["sha256"]:
+                if ((mount / entry["name"]).stat().st_size != entry["size"]
+                        or file_hash(mount / entry["name"]) != entry["sha256"]):
                     raise ValueError("Built game ISO failed readback verification.")
-            for name in ("game-media.json", "install-gog.cmd", "install-gog.ps1"):
+            for name in ("game-media.json", *GAME_HELPERS):
                 if (mount / name).read_bytes() != (stage / name).read_bytes():
                     raise ValueError("Built game ISO helper/manifest failed verification.")
         finally:
             run(["/usr/bin/hdiutil", "detach", str(mount)])
         os.replace(temporary, output)
+        source_released()
+
+
+def source_released() -> None:
+    print("Verified game ISO published. The source folder is no longer needed; you may eject the external\n"
+          "drive in Finder. Game installation is not complete; check the result inside Windows.")
+
+
+def verify_game_media(media: Path) -> None:
+    """Validate retained retry media against its payload manifest and current helper contract."""
+    if media.is_symlink() or not media.is_file():
+        raise ValueError("Retained game ISO is not a regular file; use a fresh --home directory.")
+    with tempfile.TemporaryDirectory(prefix="flatout2-retry-") as directory:
+        mount = Path(directory)
+        run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount), str(media)])
+        try:
+            if {p.name for p in mount.iterdir()} != {*GOG_PARTS, "game-media.json", *GAME_HELPERS}:
+                raise ValueError("Retained game ISO is outdated or unrecognized; preserve it and use a fresh --home directory.")
+            manifest = json.loads((mount / "game-media.json").read_text())
+            entries = manifest["files"]
+            if manifest["schema"] != 1 or [entry["name"] for entry in entries] != list(GOG_PARTS):
+                raise ValueError("Retained game ISO has an unrecognized manifest.")
+            for entry in entries:
+                path = mount / entry["name"]
+                if path.stat().st_size != entry["size"] or file_hash(path) != entry["sha256"]:
+                    raise ValueError("Retained game ISO payload failed readback verification.")
+            for name in GAME_HELPERS:
+                if (mount / name).read_bytes() != Path(__file__).with_name(name).read_bytes():
+                    raise ValueError("Retained game ISO helpers are outdated; preserve it and use a fresh --home directory.")
+        finally:
+            run(["/usr/bin/hdiutil", "detach", str(mount)])
+    source_released()
 
 
 def reload_vm(vm_id: str) -> None:
@@ -622,10 +748,26 @@ def reload_vm(vm_id: str) -> None:
          '(first virtual machine whose id is (item 1 of argv))\nend run', vm_id])
 
 
+def publish_configuration(bundle: Path, vm_id: str, original: bytes, config: dict[str, Any], reload: bool = True) -> None:
+    """Restore original config on reload failure, retaining completed media as evidence."""
+    temporary = bundle / f"config-{uuid.uuid4()}.plist"
+    try:
+        temporary.write_bytes(plistlib.dumps(config))
+        os.replace(temporary, bundle / "config.plist")
+        if reload:
+            reload_vm(vm_id)
+    except Exception:
+        temporary.write_bytes(original)
+        os.replace(temporary, bundle / "config.plist")
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def game_media(args: argparse.Namespace) -> None:
     destination = args.home.expanduser().absolute()
     bundle = destination / f"{NAME}.utm"
-    if any(path.is_symlink() for path in (destination, *destination.parents)) or any(p.is_symlink() for p in bundle.rglob("*")):
+    if any(path.is_symlink() for path in (bundle, *bundle.parents)) or any(p.is_symlink() for p in bundle.rglob("*")):
         raise ValueError("Refusing VM state containing symlinks.")
     config_path = bundle / "config.plist"
     original = config_path.read_bytes()
@@ -640,46 +782,83 @@ def game_media(args: argparse.Namespace) -> None:
     if header[512:520] != b"EFI PART" and header[4096:4104] != b"EFI PART":
         raise ValueError("No installed GPT guest disk found. Finish Windows setup first; its disk will not be changed.")
     attached = [d for d in config["Drive"] if d["ImageName"] == "game.iso"]
+    media = data / "game.iso"
+    if media.exists() and not media.is_file():
+        raise ValueError("Game media backing path is not a regular file; refusing to change it.")
+    if attached and (len(attached) != 1 or attached[0]["ImageType"] != "CD"
+                     or attached[0]["Interface"] != "USB" or not attached[0]["ReadOnly"]):
+        raise ValueError("Unrecognized game.iso drive; refusing to detach or remove its backing file.")
     if args.action == "detach-game":
         if not attached:
-            print("No game CD is attached.")
+            if not media.exists():
+                print("No game CD is attached and no local game ISO exists.")
+                return
+            print(f"Unattached game ISO found: {media}. Its contents are unrecognized and will not be deleted.")
+            answer = input("Quarantine this ISO in a unique bundle-local backup so installation can be retried? [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                raise ValueError("Cancelled; unattached game ISO preserved unchanged.")
+            if run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id]) != "stopped" or config_path.read_bytes() != original:
+                raise ValueError("VM started or configuration changed during media preparation; refusing quarantine.")
+            backup = data / f"game-orphan-{uuid.uuid4()}.iso"
+            while backup.exists() or backup.is_symlink():
+                backup = data / f"game-orphan-{uuid.uuid4()}.iso"
+            media.rename(backup)
+            print(f"Unattached game ISO quarantined: {backup}. No configuration or guest disk changed; installation can be retried.")
             return
         config["Drive"] = [d for d in config["Drive"] if d["ImageName"] != "game.iso"]
     else:
-        if attached or (data / "game.iso").exists():
+        if not attached and media.exists():
+            raise ValueError("Unattached game ISO exists. Run detach-game while stopped to confirm quarantine before retrying.")
+        if attached:
             raise ValueError("Game media already exists. Use it inside Windows, or run detach-game while stopped before retrying.")
         installer = choose_installer(args.source_dir)
-        build_game_media(installer, data / "game.iso")
-        config["Drive"].append({"ImageName": "game.iso", "ImageType": "CD", "Interface": "USB",
-                               "InterfaceVersion": 1, "Identifier": str(uuid.uuid4()), "ReadOnly": True})
+        build_game_media(installer, media)
+        config["Drive"].append(game_drive())
     audit(config)
     if run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id]) != "stopped" or config_path.read_bytes() != original:
         raise ValueError("VM started or configuration changed during media preparation; refusing configuration update.")
     # Only the configuration is replaced; setup CDs and the guest disk are untouched.
-    temporary = bundle / f"config-{uuid.uuid4()}.plist"
-    try:
-        temporary.write_bytes(plistlib.dumps(config))
-        os.replace(temporary, config_path)
-        reload_vm(vm_id)
-    except Exception:
-        temporary.write_bytes(original)
-        os.replace(temporary, config_path)
-        # Keep generated media as evidence when attachment fails, rather than deleting it.
-        raise
-    finally:
-        temporary.unlink(missing_ok=True)
+    publish_configuration(bundle, vm_id, original, config)
     if args.action == "detach-game":
-        (data / "game.iso").unlink(missing_ok=True)
+        media.unlink(missing_ok=True)
         print("Game CD detached and its local ISO removed; source files and guest installation preserved.")
         return
     run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
-    print("Windows started with the read-only FLATOUTGAME CD. Inside Windows, open that CD and run install-gog.cmd.\n"
+    print("Windows started with the read-only FLATOUTGAME CD. Updated guests attempt setup once at Player login.\n"
+          "For an older guest or an explicit retry, open that CD and run install-gog.cmd.\n"
           "Approve the Windows Yes/No elevation prompt. New VMs use an administrator Player account.\n"
           "An older standard-Player VM needs an administrator migration before this password-free flow.\n"
           "Do not run the GOG EXE directly.\n"
           "The helper checks hashes/signature, installs silently, and reports its result inside Windows.\n"
           "Then use the public FlatOut 2 shortcut as Player. This host command cannot observe installation success.\n"
           "After success, shut down Windows and run detach-game to remove temporary installer media.")
+
+
+def play(bundle: Path, config: dict[str, Any]) -> None:
+    """Boot only a stopped VM; never send guest input or inspect guest receipts."""
+    audit(config)
+    vm_id = utm_id(config["Information"]["UUID"])
+    try:
+        status = run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id])
+    except ValueError as error:
+        raise ValueError("Cannot find/query this VM in UTM. Open its .utm bundle in UTM to register it, "
+                         "then retry Play. No media changed.") from error
+    if status == "stopped":
+        run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
+        print("Windows started. At Player login, the guest dispatcher handles validated game launch or setup.\n"
+              "This host command cannot confirm installation or game launch; check Windows for the result.")
+    elif status == "started":
+        # UTM's sdef has no VM 'show' command. Opening the registered bundle selects
+        # it through UTM's supported file-open handler; no removed URL commands/input.
+        run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
+        print("Windows is already running; UTM brought forward with this VM selected.\n"
+              "If needed, open its display in UTM. Use the FlatOut 2 guest shortcut as Player.\n"
+              "No game launch was requested by the host. Use the guest Retry action after setup failure.")
+    elif status in ("paused", "suspended"):
+        raise ValueError("VM is paused/suspended. Resume it manually in UTM, then shut down Windows normally "
+                         "before a cold-start Play, or use its guest shortcut after resuming. No media changed.")
+    else:
+        raise ValueError(f"VM state is {status!r}. Wait for UTM to finish the transition, then retry Play. No media changed.")
 
 
 def main() -> None:
@@ -693,7 +872,10 @@ def main() -> None:
     parser.add_argument("--windows-sha256")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--accept-windows-license", action="store_true")
+    parser.add_argument("--stage-only", action="store_true", help="Prepare setup media without opening, registering, or starting the VM")
     args = parser.parse_args()
+    if args.stage_only and args.action != "setup":
+        parser.error("--stage-only is supported only with setup.")
     if sys.version_info < (3, 11):
         parser.error("Python 3.11 or later is required.")
     os.umask(0o077)
@@ -705,6 +887,8 @@ def main() -> None:
             setup(args)
         else:
             bundle = args.home.expanduser() / f"{NAME}.utm"
+            if not (bundle / "config.plist").is_file():
+                raise ValueError(f"VM is missing at {bundle}. Run setup first, or select the correct --home.")
             # Symlinks would defeat the bundle-local backing-file restriction.
             if bundle.is_symlink() or (bundle / "Data").is_symlink():
                 raise ValueError("VM bundle and Data directory must not be symlinks.")
@@ -720,8 +904,7 @@ def main() -> None:
             print("Configuration audit passed (not a proof of VM security).")
             if args.action == "start":
                 check_host()
-                vm_id = utm_id(config["Information"]["UUID"])
-                run([str(UTM / "Contents/MacOS/utmctl"), "start", vm_id])
+                play(bundle, config)
     except (OSError, ValueError, KeyError, TypeError, EOFError, subprocess.CalledProcessError) as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)

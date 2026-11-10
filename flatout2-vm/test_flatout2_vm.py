@@ -268,7 +268,7 @@ class UnattendedTests(unittest.TestCase):
                 return ""
             with patch.object(vm, "run", side_effect=make_iso):
                 vm.write_seed(seed, data)
-            for name in ("prepare-guest.cmd", "configure-privacy.cmd", "install-network.cmd", "guest-status.cmd"):
+            for name in ("prepare-guest.cmd", "configure-privacy.cmd", "install-network.cmd", "guest-status.cmd", *vm.GAME_HELPERS):
                 self.assertEqual((seed / name).read_bytes(), Path(__file__).with_name(name).read_bytes())
 
     def test_installs_only_on_guest_disk_zero_without_bypasses(self) -> None:
@@ -280,7 +280,388 @@ class UnattendedTests(unittest.TestCase):
         self.assertNotIn(b"SkipMachineOOBE", xml)
 
 
+class HostFlowTests(unittest.TestCase):
+    def test_stage_only_fresh_setup_never_interacts_with_utm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            firmware = root / 'UTM/Contents/Resources/qemu/edk2-arm-secure-vars.fd'
+            firmware.parent.mkdir(parents=True)
+            firmware.touch()
+            iso = root / 'windows.iso'
+            iso.touch()
+            args = argparse.Namespace(home=root / 'home', source_dir=root, accept_windows_license=True,
+                                      cache=root, stage_only=True)
+            with patch.object(vm, 'UTM', root / 'UTM'), patch.object(vm, 'check_host'), \
+                    patch.object(vm, 'choose_installer', return_value=root / vm.GOG_INSTALLER) as choose, \
+                    patch.object(vm, 'acquire_iso', return_value=iso) as acquire, \
+                    patch.object(vm, 'download_iso', return_value=iso), patch.object(vm, 'stage_network_driver'), \
+                    patch.object(vm, 'prepare_windows_media'), patch.object(vm, 'write_seed'), \
+                    patch.object(vm, 'build_game_media'), patch.object(vm, 'run') as run, \
+                    patch.object(vm, 'start_setup_vm') as start, patch('builtins.print') as output:
+                vm.setup(args)
+                choose.assert_called_once()
+                acquire.assert_called_once()
+                run.assert_not_called()
+                start.assert_not_called()
+                self.assertIn('VM prepared, not started', output.call_args.args[0])
+                self.assertNotIn('Windows setup has started', output.call_args.args[0])
+                self.assertIn('docs/cleanup.md', output.call_args.args[0])
+            config = plistlib.loads((args.home / f'{vm.NAME}.utm/config.plist').read_bytes())
+            vm.audit(config)
+            self.assertEqual(config['Sound'], [])
+            self.assertEqual(config['Drive'][-1]['ImageName'], 'game.iso')
+
+    def test_stage_only_blank_retry_preserves_state_without_registration_or_reload(self) -> None:
+        for status in ('stopped', None, 'started'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory).resolve()
+                bundle = home / f'{vm.NAME}.utm'
+                data = bundle / 'Data'
+                data.mkdir(parents=True)
+                (bundle / 'config.plist').write_bytes(plistlib.dumps(vm.configuration(str(vm.uuid.uuid4()))))
+                disk = data / 'system.raw'
+                disk.write_bytes(bytes(1024 * 1024))
+                seed = home / 'seed'
+                (seed / 'drivers/NetKVM').mkdir(parents=True)
+                (seed / 'drivers/NetKVM/netkvm.inf').touch()
+                answer = seed / 'Autounattend.xml'
+                answer.write_bytes(b'original answer')
+                credentials = home / 'credentials.json'
+                credentials.write_bytes(b'original accounts')
+                before = {p: p.read_bytes() for p in (disk, answer, credentials)}
+
+                def command(command: list[str]) -> str:
+                    self.assertEqual(command[1], 'status')
+                    if status is None:
+                        raise ValueError('Virtual machine not found.')
+                    return status
+
+                with patch.object(vm, 'run', side_effect=command), patch.object(vm, 'choose_installer'), \
+                        patch.object(vm, 'build_game_media') as build, patch.object(vm, 'prepare_windows_media'), \
+                        patch.object(vm, 'write_seed') as write, patch.object(vm, 'reload_vm') as reload, \
+                        patch.object(vm, 'start_setup_vm') as start:
+                    if status == 'started':
+                        with self.assertRaisesRegex(ValueError, 'Shut down'):
+                            vm.refresh_seed(home, stage_only=True)
+                        build.assert_not_called()
+                        write.assert_not_called()
+                    else:
+                        vm.refresh_seed(home, stage_only=True)
+                        build.assert_called_once()
+                    reload.assert_not_called()
+                    start.assert_not_called()
+                self.assertEqual({p: p.read_bytes() for p in before}, before)
+
+    def test_stage_only_installed_gpt_refuses_before_game_route(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            firmware = root / 'UTM/Contents/Resources/qemu/edk2-arm-secure-vars.fd'
+            firmware.parent.mkdir(parents=True)
+            firmware.touch()
+            home = root / 'home'
+            data = home / f'{vm.NAME}.utm/Data'
+            data.mkdir(parents=True)
+            header = bytearray(8192)
+            header[512:520] = b'EFI PART'
+            (data / 'system.raw').write_bytes(header)
+            args = argparse.Namespace(home=home, source_dir=root, accept_windows_license=True, stage_only=True)
+            with patch.object(vm, 'UTM', root / 'UTM'), patch.object(vm, 'check_host'), \
+                    patch.object(vm, 'game_media') as game, patch.object(vm, 'run') as run:
+                with self.assertRaisesRegex(ValueError, 'installed GPT'):
+                    vm.setup(args)
+                game.assert_not_called()
+                run.assert_not_called()
+            self.assertEqual((data / 'system.raw').read_bytes(), header)
+
+    def test_stage_only_rejected_for_every_non_setup_action(self) -> None:
+        for action in ('audit', 'start', 'install-game', 'detach-game'):
+            with self.subTest(action=action), patch.object(vm.sys, 'argv', ['flatout2_vm.py', action, '--stage-only']), \
+                    patch.object(vm, 'check_host') as check, patch.object(vm, 'run') as run:
+                with self.assertRaises(SystemExit) as error:
+                    vm.main()
+                self.assertEqual(error.exception.code, 2)
+                check.assert_not_called()
+                run.assert_not_called()
+
+    def test_play_state_matrix_never_writes_media(self) -> None:
+        for status in ('stopped', 'started', 'paused', 'suspended', 'starting', 'pausing', 'resuming', 'stopping', 'unknown'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                bundle = Path(directory) / 'vm.utm'
+                bundle.mkdir()
+                evidence = bundle / 'game.iso'
+                evidence.write_bytes(b'preserved')
+                config = vm.configuration(str(vm.uuid.uuid4()))
+                with patch.object(vm, 'run', return_value=status) as run, patch('builtins.print') as output:
+                    if status in ('stopped', 'started'):
+                        vm.play(bundle, config)
+                        command = run.call_args_list[-1].args[0]
+                        if status == 'stopped':
+                            self.assertEqual(command[1], 'start')
+                            self.assertIn('cannot confirm', output.call_args.args[0])
+                        else:
+                            self.assertEqual(command, ['/usr/bin/open', '-a', str(vm.UTM), str(bundle)])
+                            self.assertIn('No game launch was requested', output.call_args.args[0])
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'No media changed'):
+                            vm.play(bundle, config)
+                        self.assertEqual(run.call_count, 1)
+                self.assertEqual(evidence.read_bytes(), b'preserved')
+
+    def test_play_preserves_strict_audit_and_reports_unregistered_vm(self) -> None:
+        config = vm.configuration(str(vm.uuid.uuid4()))
+        config['Sound'] = [{'Hardware': 'intel-hda'}]
+        with patch.object(vm, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'Audio devices'):
+                vm.play(Path('vm.utm'), config)
+            run.assert_not_called()
+        config['Sound'] = []
+        with patch.object(vm, 'run', side_effect=ValueError('Virtual machine not found')):
+            with self.assertRaisesRegex(ValueError, 'register it'):
+                vm.play(Path('vm.utm'), config)
+
+    def test_fresh_configuration_stages_readonly_game_without_gpt_attachment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            config = vm.configuration(str(vm.uuid.uuid4()))
+            with patch.object(vm, 'build_game_media') as build, patch.object(vm, 'game_media') as existing:
+                result = vm.first_boot_configuration(config, data / vm.GOG_INSTALLER, data)
+                build.assert_called_once_with(data / vm.GOG_INSTALLER, data / 'game.iso')
+                existing.assert_not_called()
+            self.assertEqual([d['ImageName'] for d in result['Drive']],
+                             ['system.raw', 'windows.iso', 'seed.iso', 'game.iso'])
+            self.assertTrue(result['Drive'][-1]['ReadOnly'])
+            vm.audit(result)
+
+    def test_setup_source_cancellation_precedes_downloads_and_home_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            home = root / 'home'
+            firmware = root / 'UTM/Contents/Resources/qemu/edk2-arm-secure-vars.fd'
+            firmware.parent.mkdir(parents=True)
+            firmware.touch()
+            args = argparse.Namespace(home=home, source_dir=None, accept_windows_license=True)
+            with patch.object(vm, 'UTM', root / 'UTM'), patch.object(vm, 'check_host'), \
+                    patch.object(vm, 'choose_installer', side_effect=ValueError('Cancelled')), \
+                    patch.object(vm, 'acquire_iso') as acquire, patch.object(vm, 'download_iso') as download:
+                with self.assertRaisesRegex(ValueError, 'Cancelled'):
+                    vm.setup(args)
+                acquire.assert_not_called()
+                download.assert_not_called()
+            self.assertFalse(home.exists())
+
+    def test_fresh_setup_boots_only_after_game_media_configuration_is_published(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            home = root / 'home'
+            firmware = root / 'UTM/Contents/Resources/qemu/edk2-arm-secure-vars.fd'
+            firmware.parent.mkdir(parents=True)
+            firmware.touch()
+            iso = root / 'windows.iso'
+            iso.write_bytes(b'fixture')
+            args = argparse.Namespace(home=home, source_dir=root, accept_windows_license=True, cache=root)
+            events: list[str] = []
+
+            def choose(source: Path) -> Path:
+                events.append('consent')
+                return root / vm.GOG_INSTALLER
+
+            def acquire(arguments: argparse.Namespace) -> Path:
+                self.assertEqual(events, ['consent'])
+                return iso
+
+            def build(installer: Path, output: Path) -> None:
+                output.write_bytes(b'verified')
+                events.append('verified')
+
+            def start(bundle: Path, vm_id: str) -> None:
+                self.assertEqual(events, ['consent', 'verified'])
+                config = plistlib.loads((bundle / 'config.plist').read_bytes())
+                self.assertEqual(config['Drive'][-1]['ImageName'], 'game.iso')
+                self.assertEqual((bundle / 'Data/game.iso').read_bytes(), b'verified')
+                events.append('boot')
+
+            with patch.object(vm, 'UTM', root / 'UTM'), patch.object(vm, 'check_host'), \
+                    patch.object(vm, 'choose_installer', side_effect=choose), patch.object(vm, 'acquire_iso', side_effect=acquire), \
+                    patch.object(vm, 'download_iso', return_value=iso), patch.object(vm, 'stage_network_driver'), \
+                    patch.object(vm, 'prepare_windows_media'), patch.object(vm, 'write_seed'), \
+                    patch.object(vm, 'build_game_media', side_effect=build), patch.object(vm, 'start_setup_vm', side_effect=start):
+                vm.setup(args)
+            self.assertEqual(events, ['consent', 'verified', 'boot'])
+
+    def test_game_media_failure_never_boots_fresh_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            firmware = root / 'UTM/Contents/Resources/qemu/edk2-arm-secure-vars.fd'
+            firmware.parent.mkdir(parents=True)
+            firmware.touch()
+            iso = root / 'windows.iso'
+            iso.touch()
+            args = argparse.Namespace(home=root / 'home', source_dir=root, accept_windows_license=True, cache=root)
+            with patch.object(vm, 'UTM', root / 'UTM'), patch.object(vm, 'check_host'), \
+                    patch.object(vm, 'choose_installer', return_value=root / vm.GOG_INSTALLER), \
+                    patch.object(vm, 'acquire_iso', return_value=iso), patch.object(vm, 'download_iso', return_value=iso), \
+                    patch.object(vm, 'stage_network_driver'), patch.object(vm, 'prepare_windows_media'), \
+                    patch.object(vm, 'write_seed'), patch.object(vm, 'build_game_media', side_effect=ValueError('readback failed')), \
+                    patch.object(vm, 'start_setup_vm') as start:
+                with self.assertRaisesRegex(ValueError, 'readback failed'):
+                    vm.setup(args)
+                start.assert_not_called()
+
+    def test_failed_fresh_setup_recovers_unregistered_blank_home_without_recreating_state(self) -> None:
+        for published in (False, True):
+            with self.subTest(published=published), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                home = root / 'home'
+                firmware = root / 'UTM/Contents/Resources/qemu/edk2-arm-secure-vars.fd'
+                firmware.parent.mkdir(parents=True)
+                firmware.touch()
+                iso = root / 'windows.iso'
+                iso.touch()
+                args = argparse.Namespace(home=home, source_dir=root, accept_windows_license=True, cache=root)
+                registered = False
+                opens: list[list[str]] = []
+
+                def command(command: list[str]) -> str:
+                    nonlocal registered
+                    if command[0] == '/usr/bin/open':
+                        opens.append(command)
+                        registered = True
+                        return ''
+                    self.assertEqual(command[1], 'status')
+                    if not registered:
+                        raise ValueError('utmctl failed (exit 1): Virtual machine not found.')
+                    return 'stopped'
+
+                def network(seed: Path, media: Path) -> None:
+                    (seed / 'drivers/NetKVM').mkdir(parents=True)
+                    (seed / 'drivers/NetKVM/netkvm.inf').touch()
+
+                def fail_build(installer: Path, output: Path) -> None:
+                    if published:
+                        output.write_bytes(b'verified retained ISO')
+                    raise ValueError('staging interrupted')
+
+                with patch.object(vm, 'UTM', root / 'UTM'), patch.object(vm, 'check_host'), \
+                        patch.object(vm, 'choose_installer', return_value=root / vm.GOG_INSTALLER), \
+                        patch.object(vm, 'acquire_iso', return_value=iso), patch.object(vm, 'download_iso', return_value=iso), \
+                        patch.object(vm, 'stage_network_driver', side_effect=network), patch.object(vm, 'prepare_windows_media'), \
+                        patch.object(vm, 'write_seed'), patch.object(vm, 'run', side_effect=command), \
+                        patch.object(vm, 'reload_vm'), patch.object(vm, 'start_setup_vm') as start:
+                    with patch.object(vm, 'build_game_media', side_effect=fail_build):
+                        with self.assertRaisesRegex(ValueError, 'staging interrupted'):
+                            vm.setup(args)
+                    self.assertFalse(registered)
+                    start.assert_not_called()
+                    bundle = home / f'{vm.NAME}.utm'
+                    disk = bundle / 'Data/system.raw'
+                    answer = home / 'seed/Autounattend.xml'
+                    credentials = home / 'credentials.json'
+                    before = (disk.stat(), answer.read_bytes(), credentials.read_bytes())
+
+                    def build(installer: Path, output: Path) -> None:
+                        output.write_bytes(b'verified replacement ISO')
+
+                    with patch.object(vm, 'build_game_media', side_effect=build) as build_mock, \
+                            patch.object(vm, 'verify_game_media') as verify:
+                        vm.setup(args)
+                        self.assertEqual(build_mock.call_count, 0 if published else 1)
+                        self.assertEqual(verify.call_count, 1 if published else 0)
+                    self.assertEqual(opens, [['/usr/bin/open', '-a', str(vm.UTM), str(bundle)]])
+                    start.assert_called_once()
+                    self.assertEqual(disk.stat().st_ino, before[0].st_ino)
+                    self.assertEqual(disk.stat().st_size, before[0].st_size)
+                    self.assertEqual(disk.stat().st_mtime_ns, before[0].st_mtime_ns)
+                    with disk.open('rb') as source:
+                        self.assertEqual(source.read(1024 * 1024), bytes(1024 * 1024))
+                    self.assertEqual(answer.read_bytes(), before[1])
+                    self.assertEqual(credentials.read_bytes(), before[2])
+
+    def test_setup_completion_has_concrete_cleanup_path_and_save_warning(self) -> None:
+        with patch('builtins.print') as output:
+            vm.setup_guidance()
+        message = output.call_args.args[0]
+        self.assertIn(str(Path(vm.__file__).resolve().parent / 'docs/cleanup.md'), message)
+        self.assertIn('Permanent VM deletion loses game saves', message)
+        self.assertIn('installation is not complete', message)
+
+    def test_blank_retry_stages_missing_media_without_recreating_accounts_or_disk(self) -> None:
+        for retained in (False, True):
+            with self.subTest(retained=retained), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory).resolve()
+                bundle = home / f'{vm.NAME}.utm'
+                data = bundle / 'Data'
+                data.mkdir(parents=True)
+                config = vm.configuration(str(vm.uuid.uuid4()))
+                (bundle / 'config.plist').write_bytes(plistlib.dumps(config))
+                disk = data / 'system.raw'
+                disk.write_bytes(bytes(1024 * 1024))
+                seed = home / 'seed'
+                (seed / 'drivers/NetKVM').mkdir(parents=True)
+                (seed / 'drivers/NetKVM/netkvm.inf').touch()
+                answer = seed / 'Autounattend.xml'
+                answer.write_bytes(b'original credentials')
+                if retained:
+                    (data / 'game.iso').write_bytes(b'retained')
+                with patch.object(vm, 'run', return_value='stopped'), patch.object(vm, 'prepare_windows_media'), \
+                        patch.object(vm, 'write_seed'), patch.object(vm, 'start_setup_vm') as start, \
+                        patch.object(vm, 'reload_vm'), patch.object(vm, 'choose_installer', return_value=home / vm.GOG_INSTALLER) as choose, \
+                        patch.object(vm, 'build_game_media') as build, patch.object(vm, 'verify_game_media') as verify:
+                    vm.refresh_seed(home)
+                    if retained:
+                        choose.assert_not_called()
+                        build.assert_not_called()
+                        verify.assert_called_once_with(data / 'game.iso')
+                    else:
+                        choose.assert_called_once()
+                        build.assert_called_once()
+                    start.assert_called_once()
+                self.assertEqual(disk.read_bytes(), bytes(1024 * 1024))
+                self.assertEqual(answer.read_bytes(), b'original credentials')
+                self.assertEqual(plistlib.loads((bundle / 'config.plist').read_bytes())['Drive'][-1]['ImageName'], 'game.iso')
+
+
 class PrerequisiteTests(unittest.TestCase):
+    def test_unregistered_retry_never_opens_partitioned_or_unaudited_bundle(self) -> None:
+        for unsafe in ('partitioned', 'sharing', 'status-error'):
+            with self.subTest(unsafe=unsafe), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory).resolve()
+                bundle = home / f'{vm.NAME}.utm'
+                data = bundle / 'Data'
+                data.mkdir(parents=True)
+                config = vm.configuration(str(vm.uuid.uuid4()))
+                if unsafe == 'sharing':
+                    config['Sharing']['ClipboardSharing'] = True
+                (bundle / 'config.plist').write_bytes(plistlib.dumps(config))
+                (data / 'system.raw').write_bytes((b'partitioned' if unsafe == 'partitioned' else b'') + bytes(1024 * 1024))
+                message = 'Automation permission denied' if unsafe == 'status-error' else 'Virtual machine not found.'
+                with patch.object(vm, 'run', side_effect=ValueError(message)) as run:
+                    with self.assertRaises(ValueError):
+                        vm.refresh_seed(home)
+                self.assertTrue(all(call.args[0][1] == 'status' for call in run.call_args_list))
+
+    def test_retry_registration_requires_confirmed_stopped_state_before_media_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            bundle = home / f'{vm.NAME}.utm'
+            data = bundle / 'Data'
+            data.mkdir(parents=True)
+            original = plistlib.dumps(vm.configuration(str(vm.uuid.uuid4())))
+            (bundle / 'config.plist').write_bytes(original)
+            (data / 'system.raw').write_bytes(bytes(1024 * 1024))
+            seed = home / 'seed'
+            (seed / 'drivers/NetKVM').mkdir(parents=True)
+            (seed / 'drivers/NetKVM/netkvm.inf').touch()
+            (seed / 'Autounattend.xml').write_bytes(b'preserved')
+            with patch.object(vm, 'run', side_effect=[ValueError('Virtual machine not found.'), '', 'started']), \
+                    patch.object(vm, 'build_game_media') as build, patch.object(vm, 'write_seed') as write, \
+                    patch.object(vm, 'start_setup_vm') as start:
+                with self.assertRaisesRegex(ValueError, 'registered and stopped'):
+                    vm.refresh_seed(home)
+                build.assert_not_called()
+                write.assert_not_called()
+                start.assert_not_called()
+            self.assertEqual((bundle / 'config.plist').read_bytes(), original)
+
     def test_utm_ids_use_uppercase(self) -> None:
         self.assertEqual(vm.utm_id("2b87543d-5230-48a2-9255-161e7f1fe843"),
                          "2B87543D-5230-48A2-9255-161E7F1FE843")
@@ -293,7 +674,7 @@ class PrerequisiteTests(unittest.TestCase):
 
     def test_retry_refuses_partitioned_disk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory)
+            destination = Path(directory).resolve()
             bundle = destination / f"{vm.NAME}.utm"
             data = bundle / "Data"
             data.mkdir(parents=True)
@@ -306,7 +687,7 @@ class PrerequisiteTests(unittest.TestCase):
 
     def test_retry_refuses_running_vm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory)
+            destination = Path(directory).resolve()
             bundle = destination / f"{vm.NAME}.utm"
             bundle.mkdir()
             (bundle / "config.plist").write_bytes(plistlib.dumps(vm.configuration(str(vm.uuid.uuid4()))))

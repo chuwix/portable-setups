@@ -36,6 +36,10 @@ if exist "%OUT%\dxdiag.txt" (
 )
 >> "%REPORT%" echo.
 >> "%REPORT%" echo Setup logs: C:\Windows\Panther\flatout2-network.log and flatout2-privacy.log
->> "%REPORT%" echo Store sign-in and game installation are not automated yet.
+>> "%REPORT%" echo GOG offline CD installation: use Retry FlatOut 2 installation on the desktop.
+>> "%REPORT%" echo Installation results and logs: C:\ProgramData\FlatOut2VM\install-RUN-ID\result.json
+>> "%REPORT%" echo Repair preserves previous saves under C:\Games\FlatOut2-saves-GUID\Savegame.
+>> "%REPORT%" echo Close the game and restore selected save files as Player, never as administrator. Do not restore links or executables.
+>> "%REPORT%" echo Store sign-in, sound, gameplay and LAN require separate verification.
 start "" "%SystemRoot%\System32\notepad.exe" "%REPORT%"
 exit /b 0
