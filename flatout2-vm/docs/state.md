@@ -2,6 +2,20 @@
 
 ## Current scope
 
+Registration-race follow-up: user clean-clone test failed after successful media staging with
+`utmctl: Virtual machine not found`. Fresh setup and recovery queried UTM immediately after
+asynchronous bundle open. User approved bounded registration polling and a clean-clone run in
+the Herdr split under `~/dev/tink/`. Existing worktree fast-forwarded to published `0cec6f7`.
+Fix and regression tests implemented; **102 offline tests passed**, `git diff --check` and
+launcher `bash -n` passed. Fix committed locally as
+`99b4398f4de0eba0aaa06dce6213a39670949a36`.
+Clean `--no-local` clone created at `~/dev/tink/portable-setups-registration-test`, exact fix
+revision confirmed. Public setup launcher running in Herdr split `w1:p1X` with fresh home
+`~/Library/Application Support/FlatOut2VM-registration-test`; waiting at Windows license
+consent for the user. No new VM has yet been created or started. Runtime registration unverified.
+This authorizes the new test VM only; preserve all existing VM homes. No publication of this
+follow-up authorized. Earlier no-local-VM instruction is superseded only for this requested run.
+
 Current unit: finalize the flash-drive installation UX for testing on a separate Mac.
 User narrowed requirements to flash-drive installation only; authenticated GOG/Steam, audio,
 LAN, and further local VM experiments are deferred. Folder selection remains the USB fallback.

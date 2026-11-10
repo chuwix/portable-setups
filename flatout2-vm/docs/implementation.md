@@ -2,6 +2,17 @@
 
 ## Scope
 
+### Registration-race follow-up
+
+User approved the focused fix and a clean-clone run under `~/dev/tink/` in the Herdr split.
+Reuse the existing `feat/flatout2-vm` worktree, no ticket. In `flatout2_vm.py`, share a bounded
+registration wait between fresh setup and blank-home recovery: open once, poll the exact UUID
+for up to 60 half-second intervals, retry only missing registration, and require stopped state.
+Other errors propagate immediately. Timeout preserves the home and gives recovery guidance.
+Tests cover delayed fresh/recovery registration, timeout, unrelated errors, and nonstopped state.
+Run offline tests and syntax checks, then a clean local clone of the committed fix with a fresh
+distinct VM home; do not publish or merge this follow-up without approval.
+
 ### Current delivery override: flash drive only
 
 User narrowed scope to finalizing the flash-drive flow for separate-machine testing.
