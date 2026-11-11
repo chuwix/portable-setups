@@ -158,6 +158,113 @@ $result = Get-Content -Raw -LiteralPath (Join-Path (Join-Path $root ('install-' 
 {suffix}
 """
 
+    def test_dispatcher_native_and_wrapped_errors_are_neutral_and_never_reprompt(self) -> None:
+        for code, wrapped in ((1223, False), (1223, True), (5, True), (2, False)):
+            with self.subTest(code=code, wrapped=wrapped):
+                result = self.run_ps(f"""
+$Automatic=$true
+$script:elevations=0
+$script:markerBeforeUac=$false
+$script:policy=$false
+$script:locked=$false
+function Start-Process {{
+    param($FilePath, $Verb, [switch]$Wait, [switch]$PassThru, $ArgumentList)
+    $script:elevations++
+    $identity=(Read-GameManifest $media).identity
+    $attempts=Join-Path $env:LOCALAPPDATA 'FlatOut2VM/attempts'
+    $script:markerBeforeUac=Test-Path -LiteralPath (Join-Path $attempts ($identity + '.json'))
+    try {{ $handle=[IO.File]::Open((Join-Path $attempts 'dispatcher.lock'), 'Open', 'ReadWrite', 'None'); $handle.Dispose() }}
+    catch [IO.IOException] {{ $script:locked=$true }}
+    $script:policy=($ArgumentList[2] -eq 'RemoteSigned' -and $Verb -eq 'RunAs' -and $Wait -and $PassThru)
+    $error=[ComponentModel.Win32Exception]::new({code}, 'SECRET must not enter diagnostics')
+    if (${str(wrapped).lower()}) {{ $error=[Exception]::new('SECRET wrapper', $error) }}
+    throw $error
+}}
+$first=''
+try {{ Invoke-GuestStart }} catch {{ $first=$_.Exception.Message }}
+$log=Join-Path $env:LOCALAPPDATA 'FlatOut2VM/dispatcher-stages.jsonl'
+$entries=@(Get-Content -LiteralPath $log | ForEach-Object {{ $_ | ConvertFrom-Json }})
+$failure=@($entries | Where-Object stage -eq 'failed')[0]
+$firstRun=$entries[0].runId
+try {{ Invoke-GuestStart }} catch {{}}
+$afterAutomatic=$script:elevations
+$Retry=$true
+try {{ Invoke-GuestStart }} catch {{}}
+$all=@(Get-Content -LiteralPath $log | ForEach-Object {{ $_ | ConvertFrom-Json }})
+$raw=Get-Content -Raw -LiteralPath $log
+$handle=[IO.File]::Open((Join-Path $env:LOCALAPPDATA 'FlatOut2VM/attempts/dispatcher.lock'), 'Open', 'ReadWrite', 'None')
+$handle.Dispose()
+'RESULT:' + (@{{automatic=$afterAutomatic; retried=$script:elevations; marker=$script:markerBeforeUac; locked=$script:locked; policy=$script:policy;
+    cancelled=$failure.error.cancelled; native=@($failure.error.chain | Where-Object {{ $null -ne $_.nativeErrorCode }})[0].nativeErrorCode;
+    chain=@($failure.error.chain).Count; message=$first; secret=$raw.Contains('SECRET');
+    stages=@($entries.stage); modes=@($all.mode | Select-Object -Unique);
+    metadata=(@($entries | Where-Object {{ -not $_.timestamp -or $_.mode -ne 'automatic' -or $_.runId -ne $firstRun -or $_.pid -ne $PID -or $null -eq $_.session -or $_.elapsedMs -lt 0 }}).Count -eq 0);
+    runs=@($all.runId | Select-Object -Unique).Count}} | ConvertTo-Json -Depth 8 -Compress)
+""")
+                self.assertEqual(result['automatic'], 1)
+                self.assertEqual(result['retried'], 2)
+                for key in ('marker', 'locked', 'policy', 'metadata'):
+                    self.assertTrue(result[key], key)
+                self.assertEqual(result['native'], code)
+                self.assertEqual(result['cancelled'], code == 1223)
+                self.assertGreaterEqual(result['chain'], 3 if wrapped else 2)
+                self.assertFalse(result['secret'])
+                self.assertNotIn('SECRET', result['message'])
+                self.assertNotIn('denied', result['message'])
+                self.assertEqual('cancelled or not completed' in result['message'], code == 1223)
+                self.assertEqual(result['stages'], [
+                    'start', 'validate-player', 'validate-receipt', 'find-media', 'verify-media',
+                    'validate-matching-receipt', 'acquire-lock', 'register-attempt',
+                    'request-elevation', 'failed', 'finished',
+                ])
+                self.assertEqual(result['modes'], ['automatic', 'retry'])
+                self.assertEqual(result['runs'], 3)
+
+    def test_dispatcher_progress_precedes_hashing_and_log_failure_is_non_authoritative(self) -> None:
+        result = self.run_ps("""
+$script:progress=[Collections.Generic.List[string]]::new()
+$script:checks=0
+function Write-Host { param($Object) $script:progress.Add([string]$Object) }
+function Read-InstalledGame {
+    $script:checks++
+    if (-not ($script:progress -match 'hash verification may take a while')) { throw 'No progress before receipt hashing' }
+    return $null
+}
+function Read-GameManifest {
+    param($Media, [switch]$VerifyPayload)
+    if (-not ($script:progress -match 'Verifying CD payload hashes')) { throw 'No progress before payload hashing' }
+    throw 'expected payload rejection'
+}
+# An unavailable log is not permission to skip hashing, register an attempt or elevate.
+function Add-Content { throw 'Diagnostic storage unavailable' }
+$script:starts=0
+function Start-Process { $script:starts++ }
+$message=''
+try { Invoke-GuestStart } catch { $message=$_.Exception.Message }
+'RESULT:' + (@{checks=$script:checks; starts=$script:starts; message=$message;
+    attempted=(Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'FlatOut2VM/attempts'))} | ConvertTo-Json -Compress)
+""")
+        self.assertEqual(result, {'checks': 1, 'starts': 0, 'message': 'expected payload rejection',
+                                  'attempted': False})
+
+    def test_dispatcher_non_native_error_is_not_classified_as_cancellation(self) -> None:
+        result = self.run_ps("""
+$Automatic=$true
+$script:starts=0
+function Start-Process { $script:starts++; throw [InvalidOperationException]::new('SECRET internal detail') }
+$message=''
+try { Invoke-GuestStart } catch { $message=$_.Exception.Message }
+try { Invoke-GuestStart } catch {}
+$log=Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'FlatOut2VM/dispatcher-stages.jsonl')
+$failure=@($log | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object stage -eq 'failed')[0]
+'RESULT:' + (@{starts=$script:starts; cancelled=$failure.error.cancelled;
+    native=@($failure.error.chain | Where-Object { $null -ne $_.nativeErrorCode }).Count;
+    secret=(($log -join '').Contains('SECRET') -or $message.Contains('SECRET'));
+    generic=$message.Contains('helper could not be started')} | ConvertTo-Json -Compress)
+""")
+        self.assertEqual(result, {'starts': 1, 'cancelled': False, 'native': 0,
+                                  'secret': False, 'generic': True})
+
     def test_installer_crash_never_publishes_receipt_even_when_game_exists(self) -> None:
         result = self.run_ps(self.install_body(-1073740771, """
 'RESULT:' + (@{failed=$failed; receipt=$receiptExists; status=$result.status; starts=$script:starts} | ConvertTo-Json -Compress)
@@ -291,6 +398,8 @@ function Start-Process {
     return [pscustomobject]@{ExitCode=0}
 }
 Invoke-GuestStart
+$stages=@(Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'FlatOut2VM/dispatcher-stages.jsonl') |
+    ForEach-Object { ($_ | ConvertFrom-Json).stage })
 $root=Join-Path $env:ProgramData 'FlatOut2VM'
 $receipt=Get-Content -Raw -LiteralPath (Join-Path $root 'gog-installed.json') | ConvertFrom-Json
 $resultPath=Join-Path (Join-Path $root ('install-' + $receipt.runId)) 'result.json'
@@ -299,9 +408,13 @@ $result.status='failed'
 Write-GuestJson $resultPath $result
 $rejected=$false
 try { Invoke-GuestStart } catch { $rejected=$true }
-'RESULT:' + (@{elevations=$script:elevations; launches=$script:launches; rejected=$rejected} | ConvertTo-Json -Compress)
+'RESULT:' + (@{elevations=$script:elevations; launches=$script:launches; rejected=$rejected; stages=$stages} | ConvertTo-Json -Compress)
 """)
-        self.assertEqual(result, {'elevations': 1, 'launches': 1, 'rejected': True})
+        self.assertEqual(result, {'elevations': 1, 'launches': 1, 'rejected': True, 'stages': [
+            'start', 'validate-player', 'validate-receipt', 'find-media', 'verify-media',
+            'validate-matching-receipt', 'acquire-lock', 'register-attempt', 'request-elevation',
+            'helper-exited', 'validate-helper-result', 'launch-game', 'game-process-started', 'finished',
+        ]})
 
     def test_all_guest_powershell_files_parse(self) -> None:
         result = self.run_ps(f"""
