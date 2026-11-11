@@ -25,7 +25,7 @@ racing/saves used experimental graphics and **NoSound**; launch after restart us
 approved manual experimental shortcut, not a shipped feature or successful receipt. Audio failed
 performance testing. LAN and cross-reboot save persistence remain unverified. See
 [verified findings and remaining runtime checks](docs/state.md), including the latest offline
-test result and pending publication/cleanup. Static checks do not prove isolation or gameplay.
+test result and completed local cleanup. Static checks do not prove isolation or gameplay.
 
 ## Security boundary
 

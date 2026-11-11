@@ -19,7 +19,7 @@ one-click setup. Check the project's status before using it.
 ### Test the FlatOut 2 prototype
 
 Experimental source is available on `main`; check the project's
-[current verification state](flatout2-vm/docs/state.md) for pending follow-up publication.
+[current verification state](flatout2-vm/docs/state.md) for findings and remaining blockers.
 On an Apple Silicon Mac with Terminal, Homebrew, and Git available:
 
 ```sh
