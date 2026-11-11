@@ -2,6 +2,140 @@
 
 ## Current scope
 
+### Paused handoff: 2026-11-11
+
+- **Working:** user confirms `FlatOut 2 - experimental launch` starts the game after the
+  restart. This is an approved manual, unelevated launch of existing files, not a successful
+  installer result or accepted automatic flow.
+- **Current VM:** `~/Library/Application Support/FlatOut2VM-registration-test`, UUID
+  `5576F933-CF23-48D0-80BC-9009B7FCD285`. Left as-is after user testing; no shutdown requested
+  or performed at handoff. Older VM homes and saves remain untouched.
+- **Networking:** this test VM is bridged to Wi-Fi `en0`. Guest SSID membership and LAN discovery
+  are unverified. Bridging relaxes host/LAN isolation; shared-mode IsolateFromHost does not
+  protect bridged traffic. Folder/clipboard/USB sharing remain disabled. Stopped-only rollback
+  backup: VM-home `config-before-guest-wifi-20261110.plist`.
+- **Blocked:** initial automatic elevation cancellation; GOG exit `0xC000041D`; later repair
+  refusal for writable game-root ACL; no successful receipt. Guarded launcher remains blocked.
+  Graphics automation, native repair validation and end-to-end acceptance remain incomplete.
+- **Source:** registration fix `99b4398` and tracker commit `298c6cc` are local, not published.
+  Startup instrumentation/tests and documentation updates remain uncommitted. Latest completed
+  verification: **105 offline tests**, diff whitespace and launcher syntax checks passed. Windows
+  runtime verification of instrumentation remains pending; it is not installed in this VM or
+  `~/dev/tink/portable-setups-registration-test` (clean test clone at `99b4398`).
+- **Resume:** preserve saves/evidence first; inspect exact WER attachment/report paths with visible
+  access errors before proposing another instrumented installer run. Do not repeatedly Retry,
+  fabricate receipts, normalize ACLs, or overwrite the working manual shortcut. Any new crash
+  tooling/capture, publication, deletion or further VM mutation needs appropriate approval.
+- **Stop point:** user requested state finalization only. No additional VM operations, commits,
+  push or merge performed. Detailed observations below are historical evidence, not active work.
+
+### Investigation evidence
+
+User explicitly approved separate manual experimental shortcut, relaxing receipt gate only for
+that shortcut in this test VM. Created as unelevated Player on Player desktop:
+`FlatOut 2 - experimental launch.lnk`, target `C:\Games\FlatOut2\FlatOut2.exe`, working
+directory `C:\Games\FlatOut2`, no arguments or elevation flag. Description states installation
+failed/no validated receipt. Creation and target readback captured in temporary
+`flatout2-experimental-shortcut.png`. Existing guarded launcher, receipts/results, ACLs, source,
+saves and automatic startup unchanged. No game launch sent by agent; user confirmed it works. This is
+an explicitly approved manual escape hatch, NOT an automatic-install fix or receipt success.
+
+Post-restart launch investigation: user reports game ran before restart. Current public shortcuts
+all modified 19:09:50 and point to guarded guest-start.cmd (FlatOut 2 uses -PlayOnly). Newer failed
+helper result run `d1102c1b-728a-4fa4-91f8-6d80011c4804`, completed 19:09:54.0505208-08:00,
+rejects writable destination/ancestor `C:\Games\FlatOut2`; no ownership/ACL takeover attempted.
+This intervening helper attempt explains guard recreation before failure; reboot alone does not
+rewrite shortcuts in source. No such retry initiated by agent during this inspection. User's
+earlier playable installation is runtime evidence, NOT successful installer receipt. No new repair,
+receipt edit, direct launch, save mutation, or reinstall performed. Screenshots temporary
+`flatout2-current-shortcuts.png`, `flatout2-recent-results.png`. ACL follow-up delegated read-only.
+Read-only icacls confirms an Everyone allow entry on game root (visible `(OI)(CI)(F...`)
+and executable; C:\Games retains SYSTEM/Admin full and Users RX. Screenshot partially obscured
+by OneDrive prompt, so complete ACE details and Savegame ACL not yet captured. No changes made.
+
+Guest-Wi-Fi LAN experiment: user explicitly expanded scope to router guest Wi-Fi (not direct
+guest radio or USB passthrough). User shut down test VM; independently confirmed stopped UUID
+`5576F933-CF23-48D0-80BC-9009B7FCD285`. Backed up its configuration to VM-home
+`config-before-guest-wifi-20261110.plist`, then used UTM scripting to update existing NIC index 0
+to Bridged, BridgeInterface en0. Index 1 was rejected without applying the requested change;
+readback established zero-based index 0. Verified bridging saved, sharing disabled, VM stopped;
+then started this test VM only. Host guest SSID membership remains user responsibility (SSID
+query unreliable); router guest/client isolation can still block LAN. No router/firewall/security
+policy changes or old-VM mutations. Shared-only IsolateFromHost flag remains in config but does
+NOT provide host isolation in bridged mode. LAN success unverified. Network backup permits
+stopped-only rollback. Production defaults unchanged; existing strict audit may reject unrelated
+experimental devices, so this is not acceptance of launcher/gameplay readiness.
+
+User approved continued investigation with subagents. Independent read-only reviews found no
+verified GOG crash fix or demonstrated first-login UAC presentation defect. 122.33-second
+cancellation interval is not proof of a Windows timeout. GOG late `.tmp` callback crash is not
+evidence of DirectX failure; earlier DirectX exit 0 and failed /NOGUI weaken that hypothesis.
+Scoped worker implemented guest-local stages/native exception diagnostics plus early progress,
+without changing consent/retry/security gates. Primary gathered existing Application events and
+WER evidence only; no further installer attempt. Any dump remains private. Instrumented crash
+reproduction in a disposable stopped clone remains a proposal, not performed or authorized here.
+Application event 1001 captured at 18:20:37 confirms APPCRASH with both application and fault
+module `setup_flatout_2_1.0_(26697).tmp`, version `51.1052.0.0`; event text saved guest-local
+as `%TEMP%\flatout-crash-events.txt`. Unelevated ProgramData WER enumeration returned no
+matching report/dump entries, but suppressed access errors mean absence is NOT established.
+No existing dump has been obtained. A longer inventory command failed to produce its expected
+file; abandoned it rather than treating missing output as evidence. Guest diagnostic shell open.
+Further event inspection does list historical `.tmp.dmp` attachments and ReportArchive paths.
+Exact-path accessibility has not been established; no dump copied or analyzed. Captured listing
+in temporary `flatout2-wer-paths.png`; do not treat event references as retained-file proof.
+Crash-review next step: inspect event 1001 attached-file/report-directory fields, then test exact
+paths with visible access errors before any rerun. If no retained dump is accessible, propose one
+instrumented run in a disposable stopped clone: official Microsoft ProcDump ARM64, verified Valid
+Microsoft Authenticode, attach verified `.tmp` child, `-mm -e 1 -f C0000005 -n 1`, no global
+debugger registration or full-memory dumps. First-chance AV can be handled, so correlate stack with
+the fatal crash. Do not claim ARM/x86 stack support until tested. Download/capture/clone run needs
+separate approval; no additional security change, publication, or deletion implied.
+Instrumentation now implemented in source; **105 offline tests passed**, `git diff --check`
+and launcher syntax checks passed. Focused source review found no actionable issue, but reviewer
+could not obtain a shell diff or rerun tests; real Windows 5.1/log ACL/UAC behavior remains
+unverified. Changes are uncommitted and have NOT been delivered to the running guest or clean
+clone. No crash fix claimed. Informational log path is
+`%LOCALAPPDATA%\FlatOut2VM\dispatcher-stages.jsonl`; records omit messages/payloads/command
+lines, include bounded exception codes and stage timings, and never grant retry or launch.
+
+Controlled retry FAILED (user report, independently captured result/log). Result schema 2:
+`status=failed`, completed `2026-11-10T18:20:37.8786132-08:00`, GOG installer exit
+`-1073740771` / `0xC000041D`, run `90a965f4-0799-460f-ab4f-d492de8b8a5d`.
+Log tail: installation process succeeded at 18:20:03, launches bundled DirectX `/silent`,
+"Need to restart Windows? No" at 18:20:31, then exception/access violation at `00FD7820`
+in `setup_flatout_2_1.0_(26697).tmp`, write address `0000024C`. This reproduces the earlier
+known installer crash on a fresh guest; installed files/desktop icon are not success evidence.
+No successful receipt or game launch claimed, no additional retry performed. Captures in approved
+temporary directory: `flatout2-result-json.png`, `flatout2-gog-log-tail.png`.
+Two separate unresolved runtime failures: initial automatic elevation cancellation, then vendor
+installer crash after explicit observed retry. Prior controlled-retry "unverified" status below
+is historical and superseded by this failed result; UAC visibility/approval remains unconfirmed.
+
+Controlled retry: user explicitly approved one observed Retry. Invoked the installed
+`guest-start.cmd -Retry` unelevated through Windows Run in test UUID
+`5576F933-CF23-48D0-80BC-9009B7FCD285`. No UAC approval input was sent by the agent.
+Subsequent window captures show elevated PowerShell copying/verifying both payload files and
+"Installing FlatOut 2. Please wait"; run directory
+`C:\ProgramData\FlatOut2VM\install-90a965f4-0799-460f-ab4f-d492de8b8a5d`.
+The UAC prompt itself was not captured; user confirmation of seeing/approving it is pending.
+Installer result was subsequently confirmed failed as recorded above; no successful receipt.
+Manual retry reaching installation is diagnostic
+evidence only, not acceptance of first-login automatic installation. No security settings changed.
+
+Guest automatic-install investigation: user confirms Player desktop and installed shortcuts,
+but no successful automatic game installation. UTM window capture shows startup-failure.txt
+with Start-Process cancellation at `2026-11-10T17:56:31.3075113-08:00`. Read-only guest
+inspection shows attempt marker at `2026-11-10T17:54:28.9755714-08:00` (~123 seconds earlier),
+Explorer created at 17:52:33. This is consistent with unanswered elevation timing out, not proof
+of deliberate user denial or proof that the UAC prompt was visible. No marker cleared, installer
+retried, elevation approved, security policy changed, or VM restarted during investigation.
+Registration test reached Player desktop (user confirmation); automatic game-install acceptance
+remains failed. Original startup failure screenshot: temporary `flatout2-failure-detail.png`;
+attempt evidence: `flatout2-startup-evidence.png` in the approved OpenCode temporary directory.
+Diagnostic unelevated PowerShell remains open in the new test VM. A registry-policy diagnostic
+was not successfully observed; do not infer policy values. Need controlled observation of the
+elevation prompt before selecting a startup change; repeated automatic elevation remains forbidden.
+
 Registration-race follow-up: user clean-clone test failed after successful media staging with
 `utmctl: Virtual machine not found`. Fresh setup and recovery queried UTM immediately after
 asynchronous bundle open. User approved bounded registration polling and a clean-clone run in
@@ -11,14 +145,18 @@ launcher `bash -n` passed. Fix committed locally as
 `99b4398f4de0eba0aaa06dce6213a39670949a36`.
 Clean `--no-local` clone created at `~/dev/tink/portable-setups-registration-test`, exact fix
 revision confirmed. Public setup launcher running in Herdr split `w1:p1X` with fresh home
-`~/Library/Application Support/FlatOut2VM-registration-test`; waiting at Windows license
-consent for the user. No new VM has yet been created or started. Runtime registration unverified.
+`~/Library/Application Support/FlatOut2VM-registration-test`. Initial license-consent pause is
+resolved: user continued, host launcher started this VM, and user confirmed Player desktop.
+Registration/start recovery is runtime verified for this run, not game-install success.
 This authorizes the new test VM only; preserve all existing VM homes. No publication of this
 follow-up authorized. Earlier no-local-VM instruction is superseded only for this requested run.
 
-Current unit: finalize the flash-drive installation UX for testing on a separate Mac.
+### Earlier published-candidate handoff (historical)
+
+Earlier unit: finalize the flash-drive installation UX for testing on a separate Mac.
 User narrowed requirements to flash-drive installation only; authenticated GOG/Steam, audio,
-LAN, and further local VM experiments are deferred. Folder selection remains the USB fallback.
+LAN, and further local VM experiments were deferred at that point. Later guest-Wi-Fi testing was
+explicitly approved as recorded above. Folder selection remains the USB fallback.
 The source menu now offers only these two implemented offline routes. Existing
 `feat/flatout2-vm` worktree, no ticket; canonical requirements are in implementation.md.
 User explicitly authorized commit, push, and merge of the experimental test candidate.
@@ -27,10 +165,10 @@ Published and merged to `main` as `f2f1eac`. Runtime acceptance is not implied b
 Handoff: [second-machine checklist](testing.md), [user flow](../README.md), and
 [cleanup](cleanup.md). This is a runtime test candidate, not accepted E2E: known GOG crash,
 unautomated graphics provisioning, and native Windows UX/repair checks remain open. All VMs
-are off and UTM exited; host window dragging/resizing stayed laggy after exit, while pointer
+were off and UTM exited before the later authorized registration test; host dragging/resizing stayed laggy after exit, while pointer
 and scrolling were smooth. No further host settings or VM operations are part of this unit.
 
-Latest focused verification: **99 offline tests passed**, including the two-choice source-menu
+Pre-publication verification: **99 offline tests passed**, including the two-choice source-menu
 regressions; `git diff --check`, launcher `bash -n`, and local documentation file-link checks
 passed. README now removes the contradictory full guest-tools/
 store setup recipe. New `docs/testing.md` records second-machine install/UAC/retry/Play/save/

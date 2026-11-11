@@ -50,8 +50,11 @@ command does not prove successful guest installation.
 3. **First login:** Windows reaches Player automatically. No routine diagnostics window or
    generated-password entry. Defender, updates, driver signatures, and UAC stay enabled.
 4. **Installation:** One expected Yes/No UAC prompt; no manual installer wizard. Success
-   requires the protected receipt and matching result. Preserve failure logs. Exit 3010 must
-   defer launch until a later boot if encountered. The known crash must remain failure.
+    requires the protected receipt and matching result. Preserve failure logs. Exit 3010 must
+    defer launch until a later boot if encountered. The known crash must remain failure.
+    Observe the first automatic attempt continuously from before Player login and record whether
+    UAC appeared and how it was answered. Manual Retry reaching installation does not pass this
+    check. A cancellation message alone does not establish that the user clicked No.
 5. **Denial/retry:** In a separate disposable attempt, deny UAC. A later login must not
    automatically prompt again for the same media. Use **Retry FlatOut 2 installation** to
    request consent deliberately. Failure must remain actionable, without automatic loops.
@@ -89,6 +92,8 @@ Provide revision, environment, checklist results, exact error/exit code, and hos
 Installer evidence is under `C:\ProgramData\FlatOut2VM\install-<run-id>`; on-demand diagnostics
 are under `%LOCALAPPDATA%\FlatOut2VM`. Do not publish credentials, unattended answer files,
 purchased installers, full VM bundles, or unreviewed private logs.
+Keep Windows crash dumps private: they can contain purchased installer data and process memory.
+Share only reviewed, sanitized fault-module and stack findings, not the dumps themselves.
 
 Offline tests alone do not accept the flash-drive flow. Failed installation or blocked gameplay
 must remain explicit. Publication and deletion of existing VMs require separate approval.

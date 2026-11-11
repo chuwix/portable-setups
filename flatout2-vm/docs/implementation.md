@@ -2,6 +2,24 @@
 
 ## Scope
 
+### Paused handoff: 2026-11-11
+
+Current outcome and resume instructions are in [state.md](state.md). User confirmed the separate
+experimental manual shortcut works after restart; this does not satisfy automatic installation or
+receipt acceptance. Guest-Wi-Fi bridging was approved for the test VM only, with reduced network
+isolation; production defaults remain unchanged. Pause further work. No new publication, VM
+mutation, installer attempt or cleanup is authorized by this state-finalization request.
+
+### Automatic-install diagnostics follow-up
+
+User approved continued investigation using subagents. Separate startup cancellation from the
+vendor crash: add informational per-stage guest logging and early verification progress in
+`guest-start.ps1`, with regression tests in `test_guest_flow.py`. Capture exception chains/native
+codes and neutral cancellation wording; logs never establish success or grant another attempt.
+Keep once-per-media auto-attempt, explicit Retry, UAC and receipt gates unchanged. Primary alone
+serializes guest diagnostics; subagents do source/research and scoped code work. No new installer
+run, security-policy change, dump upload, or publication is part of diagnostic instrumentation.
+
 ### Registration-race follow-up
 
 User approved the focused fix and a clean-clone run under `~/dev/tink/` in the Herdr split.
