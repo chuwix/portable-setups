@@ -46,11 +46,19 @@ receipts, results, ACLs, or automatic startup and must not become an undocumente
 
 ## Publication and permanent cleanup
 
-The user has authorized **pushing all changes to `main`** and **permanent removal of all local
-FlatOut runtime state, without backups**, accepting loss of saves, Windows state, and runtime
-evidence. **Publication and cleanup are pending primary-session execution and verification.**
-This authoring pass performs neither operation. The authorization supersedes earlier
-preservation-only and no-push instructions; it is not a claim that deletion or publication occurred.
+**Completed on 2026-11-11, without backups, as explicitly requested.** Source and diagnostics
+were published to `main` through merge `f45471e`; the separate repo-wide authoring commit is
+`8b6e76c`. The final cleanup record is a subsequent documentation-only update.
+
+All eight inventoried FlatOut VMs were confirmed stopped, deleted from UTM, and their dedicated
+homes permanently removed, including saves, credentials, media, archives and diagnostic evidence.
+Removed the dedicated download cache, both clean test clones under `~/dev/tink/`, and inventoried
+temporary captures/scripts. UTM listed no remaining VMs before quitting; no UTM processes remained.
+The experimental `QEMUSoundBackend` override was removed, restoring its original absent/default
+state. No shared tools were uninstalled. Maintained source, unrelated files, and purchased
+flash-drive media were not targeted. Targeted filesystem checks found no remaining FlatOut homes,
+cache or test clones; the session's temporary artifact directory was empty. This is scoped runtime
+cleanup, not secure erasure of storage, system logs, or agent conversation history.
 
 Retain only sanitized findings in repository documentation. Do not rely on historical VM homes,
 screenshots, logs, dumps, probe artifacts, or rollback copies surviving cleanup. The detailed
@@ -58,13 +66,9 @@ investigation history remains in git at `57e009c`.
 
 ## Resume
 
-1. **Primary session:** verify the final source/docs revision, publish the approved changes,
-   inventory and permanently remove the authorized local FlatOut runtime state without backups,
-   then record verified publication/cleanup outcomes. Do not remove unrelated VMs, source media,
-   or shared tools under an ambiguous name match.
-2. **Runtime tester:** use a fresh home and the [second-machine checklist](testing.md), not the
+1. **Runtime tester:** use a fresh home and the [second-machine checklist](testing.md), not the
    old experimental shortcut or an assumed retained VM. Observe the initial UAC attempt directly.
-3. **Implementer:** resolve the installer failure without weakening success/receipt gates and
+2. **Implementer:** resolve the installer failure without weakening success/receipt gates and
    deliver reviewed graphics-only provisioning. Native diagnostics, ACL/token/COM behavior,
    repair/archive safety, Play, media detachment, and cross-reboot saves still need acceptance.
 
