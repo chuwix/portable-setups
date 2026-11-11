@@ -1,247 +1,139 @@
-# Automatic Player startup, graphics validation, and game installation
+# FlatOut 2 VM requirements and acceptance
 
-## Scope
+## Scope and document ownership
 
-### Paused handoff: 2026-11-11
+Deliver an experimental Apple Silicon/macOS UTM flow using a legitimate GOG offline installer
+from USB or an explicitly selected folder. Authenticated GOG/Steam routes, LAN, reliable audio,
+disposable guests, Tiny11, and other host platforms are deferred. Graphics automation is a
+delivery gap, not an implicit manual prerequisite that counts as complete.
 
-Current outcome and resume instructions are in [state.md](state.md). User confirmed the separate
-experimental manual shortcut works after restart; this does not satisfy automatic installation or
-receipt acceptance. Guest-Wi-Fi bridging was approved for the test VM only, with reduced network
-isolation; production defaults remain unchanged. Pause further work. No new publication, VM
-mutation, installer attempt or cleanup is authorized by this state-finalization request.
-
-### Automatic-install diagnostics follow-up
-
-User approved continued investigation using subagents. Separate startup cancellation from the
-vendor crash: add informational per-stage guest logging and early verification progress in
-`guest-start.ps1`, with regression tests in `test_guest_flow.py`. Capture exception chains/native
-codes and neutral cancellation wording; logs never establish success or grant another attempt.
-Keep once-per-media auto-attempt, explicit Retry, UAC and receipt gates unchanged. Primary alone
-serializes guest diagnostics; subagents do source/research and scoped code work. No new installer
-run, security-policy change, dump upload, or publication is part of diagnostic instrumentation.
-
-### Registration-race follow-up
-
-User approved the focused fix and a clean-clone run under `~/dev/tink/` in the Herdr split.
-Reuse the existing `feat/flatout2-vm` worktree, no ticket. In `flatout2_vm.py`, share a bounded
-registration wait between fresh setup and blank-home recovery: open once, poll the exact UUID
-for up to 60 half-second intervals, retry only missing registration, and require stopped state.
-Other errors propagate immediately. Timeout preserves the home and gives recovery guidance.
-Tests cover delayed fresh/recovery registration, timeout, unrelated errors, and nonstopped state.
-Run offline tests and syntax checks, then a clean local clone of the committed fix with a fresh
-distinct VM home; do not publish or merge this follow-up without approval.
-
-### Current delivery override: flash drive only
-
-User narrowed scope to finalizing the flash-drive flow for separate-machine testing.
-Continue in the existing approved worktree, no ticket. Preserve existing implementation and
-VM data; no further local VM/audio experiments. User subsequently explicitly approved commit,
-push, and merge as an experimental candidate, with runtime blockers retained.
-
-- AC-6 now offers USB detection and explicit folder selection only. Authenticated GOG/Steam
-  delivery in AC-9 and the earlier four-option roadmap are deferred, not completed.
-- README owns setup, first-login UAC, failure/retry, stopped/running Play, and cleanup guidance.
-- `docs/testing.md` owns the independent-machine runtime checklist and known blockers.
-- Keep strict installer exit/receipt gates and isolation. The known GOG crash is not success.
-- Graphics automation remains an explicit delivery gap; do not recommend full guest tools.
-- Verify offline regressions and source review, then hand off runtime acceptance. No claim of
-  end-to-end completion until the separate machine passes the required checks.
-
-Continue the experimental Apple Silicon setup on `feat/flatout2-vm` in the existing worktree.
-No reference ticket. Keep changes local until publishing is explicitly approved.
-Users must not need host accessibility or screen-recording permissions. Store authentication
-and game ownership remain interactive. Do not weaken driver signature checks or host isolation.
+- [README](../README.md): user guide, prerequisites, supported media, download pins, security limits.
+- [state.md](state.md): verified findings, current publication/cleanup status, resume actions.
+- [testing.md](testing.md): runtime acceptance procedure and reporting.
+- [cleanup.md](cleanup.md): shutdown, temporary media removal, permanent removal and data loss.
 
 ## Acceptance criteria
 
-- AC-1: A fresh install reaches the Player desktop without guest input and repeats
-  that behavior after a reboot.
-- AC-2: Guest startup produces a visible diagnostic report without elevation, host automation,
-  shared folders, clipboard sharing, or USB forwarding.
-- AC-3: Privileged preparation occurs before Player login. Revised by user approval: Player is
-  a guest administrator, with UAC retained, so end users never need generated guest passwords.
-- AC-4: Graphics validation identifies the actual installed driver. A basic display driver or
-  a list of DirectX feature levels must not be reported as proof of game compatibility.
-- AC-5: Offline regression tests pass; runtime results remain distinct from static checks.
+Stable identifiers retain the original requirement mapping. Deferred criteria are not completed.
 
-## Implementation
+| ID | Required observable outcome |
+| --- | --- |
+| AC-1 | Fresh Windows setup reaches Player desktop without guest input and repeats after a normal reboot. |
+| AC-2 | Unelevated guest diagnostics produce an accessible account/network/display report without host UI automation or sharing. Successful gameplay is not obscured by diagnostics; failures remain visible. |
+| AC-3 | Privileged preparation finishes before Player login. Player is an administrator with UAC enabled, so installation asks Yes/No rather than for a generated password. |
+| AC-4 | Diagnostics identify the installed graphics driver. A basic display driver or DirectX feature-level list is never proof of game compatibility. |
+| AC-5 | Offline regression tests pass and are reported separately from runtime results. |
+| AC-6 | Source menu offers USB detection and explicit folder selection. The originally planned authenticated GOG/Steam options are deferred and not advertised as working. |
+| AC-7 | Identify the supported FlatOut 2 EXE and complete matching BIN pair; ignore FlatOut 1, AppleDouble, hidden directories, and symlinks. Resolve ambiguity with user selection. Missing parts, bad signatures, or failed transfers stop with actionable errors. Never execute the installer on macOS. |
+| AC-8 | Confirm source/terms, preserve source files, verify transfer integrity, and use temporary read-only media. No host accessibility/screen-recording permission, folder/clipboard sharing, or USB passthrough. Explicit guest helper launch and normal UAC consent are allowed; installer wizard steps remain automatic. Local hashes do not establish vendor authenticity. |
+| AC-9 | Deferred store routes keep authentication, MFA, purchases/redemption, ownership, and consent user-controlled inside Windows. Never collect account credentials. GOG Galaxy is optional; authenticated browser download could satisfy that route. |
+| AC-10 | Install onto the guest disk with logs, retry-safe state, explicit success/failure, and unelevated Player launch. No VMAdmin password entry, disabled Defender/signature checks, or weakened host isolation. |
+| AC-11 | Regressions cover discovery, ambiguity, completeness, transfer integrity, retry state, and failures. Runtime tests use the public launcher and distinguish local from published-repository runs. Gameplay, saves, sound, and LAN each require their own evidence. |
+| AC-12 | Fresh setup confirms source and verifies game ISO before first boot. Existing-VM attachment requires an installed GPT disk. Announce source release after ISO readback; external-volume eject remains manual in Finder. |
+| AC-13 | Bounded unelevated Player-login dispatcher attempts once per media identity, requests Yes/No UAC, then exits. Denial/failure requires explicit Retry. No service, polling listener, host command channel, persistent execution-policy change, or elevated game launch. |
+| AC-14 | Later Player logins attempt one receipt-validated launch. Already-running host Play focuses UTM and directs to the guest shortcut without claiming remote game launch. Missing, paused, or transitional states get guidance without media writes. |
+| AC-15 | Protected receipts bind schema, both payload names/sizes/hashes, executable path/hash, run ID, and installer exit. A crash cannot publish success. Restart-required results defer launch. Receipt-matching retry skips payload staging. Logs/results stay guest-local. |
+| AC-16 | README/setup completion link cleanup guidance distinguishing shutdown, media removal, and permanent VM removal. Warn of save/Windows loss; describe backup-before-removal, default/custom paths, registration, cache, and host-wide preferences. Guidance alone authorizes no deletion. Preserve unrelated files, source installers, other VMs, and shared prerequisites. |
 
-1. Extend `flatout2_vm.py:unattended` with native Player AutoLogon and the generated Player
-   password. Use a bounded logon count and document the stored-credential tradeoff.
-2. Extend `prepare-guest.cmd` before its final network-driver call to copy a startup diagnostic
-   into Program Files and register it in the common Startup folder. Setup owns the files;
-   diagnostics run as Player and write only under Player's local application data.
-3. Add a guest-only CMD diagnostic: report account, network configuration, installed display
-   devices, and dxdiag output. Open its report automatically, with game compatibility explicitly
-   unverified. Do not install a whole guest-tools suite or sharing agents.
-4. Update `test_flatout2_vm.py` for AutoLogon identity/password, permissions, seed completeness,
-   and startup diagnostics. Update README with verified baseline and pending new runtime checks.
-5. Investigate a versioned official experimental graphics package independently of the existing
-   NetKVM pin. Review contents/signatures before attempting installation. Do not substitute a
-   moving latest download into the launcher.
+## Implementation contracts
 
-## Verification
+These describe existing safeguards that future changes must retain, not completed runtime acceptance.
 
-Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s flatout2-vm` and
-`git diff --check` in this worktree. Test a fresh VM through `setup-flatout2.command`, then
-observe first login, report generation, and reboot without guest input. A local worktree run
-is not the public-repository E2E check. Preserve the known-working VM during testing.
+### Host setup and media
 
-Rollback: use a separate test home; do not retrofit the partitioned diagnostic VM with
-unattended installation media. Local commits are authorized; no push, merge, or deletion
-of unrelated state.
+- `flatout2_vm.py` owns unattended generation, detection/selection, game ISO creation,
+  configuration auditing, registration/start, `install-game`, and `detach-game`.
+  `.command` launchers own user-facing bootstrap and invocation. Distribution is a clone/source
+  ZIP; there is no separate standalone-download manifest.
+- [Supported build and filenames](../README.md#prerequisites) are exact until another layout has
+  a safe completeness check. USB discovery uses external physical/USB checks and bounded scanning
+  (three subfolders, at most 5000 directories). `--source-dir` skips the menu, not confirmation.
+- Stage only the two selected payload files, manifest, and allowlisted helpers. Read-only ISO
+  readback verifies hashes and exact manifest/helper bytes. Never expose the whole USB drive.
+  Seed/game helper allowlists must stay synchronized with guest validation.
+- Reject bundle-root symlinks, unsafe media types, and unrecognized drive configurations.
+  Never overwrite an existing game ISO or modify media while Windows runs. Recheck stopped
+  state and unchanged configuration before updates; restore configuration on reload failure.
+- An orphan `Data/game.iso` requires explicit `detach-game` quarantine confirmation. Preserve it
+  under a collision-safe `game-orphan-<UUID>.iso` name; recheck state/config after confirmation.
+  Preserve guest disk, other media, and source files.
+- Never recreate an existing guest disk or rerun unattended setup on a partitioned disk.
+  Blank-home retry requires stopped state and a zero-filled first MiB. This is a prototype
+  recovery check, not a general disk classifier. Installed GPT setup routes to game attachment.
+- No-prompt boot modification checks both bundled EFI image hashes and the default EFI catalog
+  entry before writing, then reads back the replacement. Keep the cached ISO unchanged and
+  the system disk before CDs in boot priority.
+- After opening a bundle once, fresh setup and blank recovery poll its exact UUID for up to
+  60 half-second intervals. Retry only missing registration, require stopped state, propagate
+  unrelated errors, and preserve the home with guidance on timeout.
+- `setup --stage-only` returns before registration/boot, including eligible blank retries.
+  Reject installed GPT homes and non-setup actions. It does not authorize experimental devices
+  or relax the production audit.
 
-## Approved next unit: installer sources and automatic game installation
+### Guest startup, installation, and repair
 
-User approved this scope on 2026-11-10. Continue in the existing worktree, no ticket.
-Local commits are authorized; publishing still requires explicit approval.
+- `prepare-guest.cmd` performs privileged preparation during Windows Setup. It installs protected
+  helpers in Program Files and registers the brief Player-only dispatcher. Native AutoLogon is
+  bounded and stores the generated Player credential; see the [security tradeoff](../README.md#security-boundary).
+  Source changes do not migrate existing guests.
+- The synchronous `specialize` command locates seed media by `flatout2-seed.tag`, not a drive
+  letter, and runs NetKVM `pnputil /add-driver /install` before OOBE. Missing media/failed install
+  fails the command; Windows Setup handles requested reboot. No full guest-tools installer runs.
+- Apply privacy policies before networking. Seed tailored-experiences policy into the default
+  user profile; set `DisablePrivacyExperience` only after policy writes succeed and use
+  `ProtectYourPC=3` to disable Express settings. Failures remain logged and fail setup.
+- `guest-start.cmd`/`guest-start.ps1` run unelevated. Record the media attempt before UAC;
+  failure/denial must not produce another automatic prompt or an indefinite CMD pause.
+  Play, Retry, and diagnostics remain explicit guest actions. Successful startup must not open
+  diagnostics over the game.
+- `install-gog.cmd`/`install-gog.ps1` and shared `guest-install.ps1` verify QEMU/read-only CD,
+  exact payload names/hashes, and Valid Authenticode from an exact allowed GOG legal name after
+  whitespace normalization. Prefix/suffix lookalikes remain rejected. Use process-only
+  `RemoteSigned` in initial/elevated sessions, never Bypass or saved-policy/Group Policy changes.
+- Copy to guest-local storage, invoke silent installation without automatic reboot, and retain
+  per-run logs/results. Nonzero failure exits stay failed, including `0xC000041D`. Host success
+  means staging/start only. The unelevated parent requires a protected schema-2 receipt and
+  matching success result before launch; restart-required results defer it to a later boot.
+- Before elevated installation, validate destination ancestors, ownership, ACLs, and reparse
+  points. Reject writable/untrusted roots rather than taking ownership or broadening permissions.
+  Recreate guarded public shortcuts after installation because the vendor may replace them.
+- Repair may preserve an intentionally Player-writable Savegame tree outside the destination,
+  under `C:\Games\FlatOut2-saves-<GUID>\Savegame`. Do not exempt unchecked writable trees from
+  elevated safety checks. Report archive location; restoration is manual and unelevated with the
+  game closed. Never perform an elevated recursive copy from writable saves.
+- `guest-status.cmd` reports account/network/display and fresh dxdiag output with a run identity.
+  Diagnostics remain under Player local application data. Informational dispatcher stage records
+  contain bounded exception/native codes and timing, not messages, payloads, or command lines.
+  Logs cannot establish success, authorize retry, or bypass launch validation.
 
-### Requirements and acceptance criteria
+### Isolation and experiments
 
-- AC-6: The user-facing launcher offers four source options:
-  1. Automatically detect a FlatOut 2 GOG offline installer on mounted USB media.
-  2. Select an installer source directory explicitly.
-  3. Obtain/install the game through GOG inside the VM.
-  4. Obtain/install the game through Steam inside the VM.
-- AC-7: USB detection and explicit-directory routes identify the FlatOut 2 executable and all
-  required matching BIN parts. Ignore macOS AppleDouble files and FlatOut 1 installers. Ask
-  when candidates are ambiguous; missing parts, invalid signatures, or failed transfers stop
-  installation with an actionable error. Do not execute supplied installers on macOS.
-- AC-8: After source selection/confirmation, transfer and installation require no host
-  accessibility or screen-recording permission. User subsequently authorized an explicit
-  guest-side helper launch and elevation step when needed; installer wizard steps should
-   still be automatic. Player is a guest administrator with UAC retained. Use temporary
-  read-only media, not host shared folders, shared clipboard, or USB passthrough. Verify copy
-  integrity; local hashes do not establish vendor authenticity. Preserve source files.
-- AC-9: GOG/Steam authentication, MFA, purchases, and required consent remain user-controlled
-  inside Windows. Do not infer ownership or collect account credentials. Users may purchase
-  or redeem the game if not owned. GOG Galaxy is optional: authenticated offline download in
-  the guest browser may satisfy the GOG route. Clearly distinguish interactive store steps
-  from automatic installation steps.
-- AC-10: All routes install onto the guest disk and converge on logged, retry-safe setup,
-  an explicit success/failure result, and a Play action that launches FlatOut 2 as Player.
-   User rejects generated-password prompts: use administrator Player and Yes/No UAC consent,
-   not VMAdmin credential entry. Never require host UI automation. Keep
-   Defender, signature checks, and isolation intact.
-- AC-11: Regression tests cover source detection, selection/ambiguity, missing BIN parts,
-  transfer integrity, installation state/retries, and failure handling. Runtime verification
-  uses the user-facing launcher with the supplied USB media; distinguish local development
-  E2E from a later published-repository E2E. Gameplay, saves, sound, and LAN require separate
-  runtime evidence; installation success alone does not establish them.
+Keep the [README security boundary](../README.md#security-boundary): no sharing agents, host
+integration channel, custom QEMU arguments, bypassed signatures, or disabled Defender/updates/UAC.
+Production networking remains Shared with requested host isolation; audio remains disabled.
+Bridging, accelerated graphics, and output-only audio experiments are not accepted defaults.
+Use versioned, reviewed graphics-only packages, not moving latest downloads or a full guest-tools
+suite. Download pins belong in the [README](../README.md#pinned-windows-media).
 
-### Delivery sequence and investigation
+An HDA test requires local launch, verified CoreAudio output-only QEMU arguments and no guest
+recording endpoint. App-wide preference alone is insufficient: remote SPICE may select duplex.
+Do not grant microphone permission. Remove an experimental HDA card while stopped before
+reverting to a potentially duplex backend. Saved-state suspension is not a reliable experiment
+rollback with the accelerated display device.
 
-1. Implement AC-6 options 1–2 first. Inspect `flatout2_vm.py`, `setup-flatout2.command`,
-   `bootstrap.sh`, and `guest-setup.ps1` before choosing integration points; preserve standalone
-   bootstrap downloads and add any new required files to its verified manifest/tests.
-2. Add source detection/selection and matching installer-part validation. Test with the supplied
-   SAMSUNT256 files recorded in state.md; do not mistake FlatOut 1 or `._` sidecars for candidates.
-3. Use the newly authorized explicit guest-side helper launch/elevation for existing VMs.
-   No privileged media watcher or automatic elevation service is needed. New VMs create Player
-   in Administrators. Existing test VM requires a one-time development migration with its
-   existing administrator credentials; that is not part of the end-user installation flow.
-   No guest agent, persistent sharing, or relaxed driver/persistent script policy is approved.
-   User approved process-only RemoteSigned for the initial and elevated helper after the
-   guest's default Restricted policy blocked its first launch. No Bypass or saved policy change.
-   Review GOG
-   silent-install switches, signatures, exit codes, dependencies, and licensing behavior using
-   current documentation before execution.
-4. Stage only the selected installer and companion files onto a read-only ISO. Do not overwrite
-   active VM media or modify a running bundle behind UTM. Preserve setup media and evidence;
-   use supported media changes or a confirmed stopped VM. Never rerun Windows unattended setup
-   on an installed disk. Detach temporary game media after success when safe.
-5. Implement guest installation/result handling and actual Player game launch, then regression
-   tests and a local launcher-based install using the supplied USB. No manual installer run
-   should be reported as automation proof.
-6. Add authenticated GOG and Steam guest routes, reusing the installed-game state and Play path.
-   Pin public prerequisite downloads/checksums; authenticated game links are not public pins.
-   Keep game installers, media, tokens, and credentials out of Git and the public repository.
-7. Update README and state.md with implemented behavior versus verified results. Validate
-    FlatOut 2 gameplay before enabling experimental graphics by default.
+## Remaining acceptance
 
-### First-slice integration
+1. Resolve the GOG crash without relabeling it success or weakening receipt/signature gates.
+   Initial automatic elevation cancellation is a separate unresolved issue; observe its actual
+   prompt/response before choosing a startup change. Manual Retry does not pass AC-13.
+2. Deliver reviewed graphics-only automation, then verify a complete NoSound race and saves
+   through normal reboot on a fresh successful installation. The manual shortcut experiment
+   satisfies neither installation nor launch acceptance.
+3. Run the [runtime checklist](testing.md): fresh administrator Player/Yes-No consent, Windows
+   PowerShell 5.1 diagnostics, native ACLs/tokens/COM/handle/archive behavior, failure/denial retry,
+   receipt-gated stopped/running Play, media detachment, and repair preserving save bytes.
+4. Repeat from an explicitly published revision on a separate Mac and record each pass, failure,
+   or blocker. Offline/static checks are necessary but insufficient.
 
-- `flatout2_vm.py`: `installer_files`, `find_installers`, `usb_roots`, `choose_installer`,
-  `build_game_media`, `reload_vm`, and `game_media`; CLI actions `install-game`/`detach-game`
-  with `--source-dir`. Setup routes installed GPT disks to game installation. Existing
-  partitioned-disk refresh rejection stays intact for non-GPT/unknown disks.
-- `install-flatout2.command`: source-menu launcher using existing bootstrap prerequisite checks.
-  Repository is distributed as clone/source ZIP; no separate download manifest exists here.
-- `install-gog.cmd`/`install-gog.ps1`: user-launched CD helper, explicit UAC elevation,
-  process-only RemoteSigned (initial and elevated sessions), hash/signature verification,
-  guest-local copy, Inno silent install, receipt/result,
-  public Player shortcut. Host Play integration remains deferred, not implemented.
-- `test_game_media.py`: discovery/completeness/ambiguity, copy verification, allowlisted media,
-  running/uninstalled VM refusal, config rollback, attach/detach preservation, and helper guards.
-- Media recovery hardening: reject a symlink at the bundle root before reading state. When
-  `Data/game.iso` exists without an attached drive, `detach-game` asks for explicit confirmation
-  and quarantines it as `Data/game-orphan-<UUID>.iso`, preserving evidence. Recheck stopped state
-  and unchanged configuration after confirmation. Reject non-file media and unrecognized drive
-  configurations. Tests cover cancellation, name collisions, failed reload recovery, changing
-  status/configuration during copy, missing backing files, and preservation of other state.
-- Source docs: current Inno flags/exit-code references via Context7 `/jrsoftware/issrc`, and UTM
-  stopped configuration reload via `/websites/getutm_app`; runtime compatibility still required.
-
-### Verification and rollback
-
-### Approved first-run UX continuation
-
-User approved the proposed UX slice, adding end-of-use removal guidance. Continue in the
-existing worktree, no ticket, local commits only, no push. Split implementation into parallel
-host orchestration and guest dispatcher units with disjoint file ownership; coordinator owns
-documentation, integration review, and serial VM experiments.
-
-- AC-12: Fresh setup confirms USB/folder source and verifies game ISO before first boot.
-  Installed-GPT attachment restriction remains for existing VMs. Announce after ISO readback
-  that the source is no longer needed; user ejects external volumes in Finder.
-- AC-13: A bounded, unelevated Player-login dispatcher attempts installation once per media
-  identity, requests normal Yes/No UAC, and exits. Denial/failure requires explicit Retry.
-  No service, polling listener, host command channel, saved execution-policy change, or
-  elevated game launch. Successful installation launches only through the unelevated parent.
-- AC-14: Later Player logins launch a receipt-validated game once. Already-running host Play
-  focuses Windows and explains guest shortcut use; never claims actual game launch.
-  Missing/suspended/transitional VM states receive actionable guidance without media writes.
-- AC-15: Receipts bind schema, both payload files/sizes/hashes, game hash/path, run ID and
-  installer exit. Crash cannot publish success; restart-required results defer launch.
-  Receipt-matching retry skips payload staging. Logs/results remain guest-local.
-- AC-16: README and setup-completion guidance link an end-of-use cleanup guide. Distinguish
-  normal shutdown, installer-media cleanup, and permanent VM removal. Warn that deleting VM
-  loses game saves/Windows state; explain preserving the stopped VM before removal. Identify
-  exact state/cache locations, custom-home handling, UTM registration, and any host-wide
-  preferences. Preserve source installers, unrelated files, other VMs, and shared prerequisites.
-  Adding guidance does not authorize deleting the current VM or implementing automatic deletion.
-
-Host unit owns flatout2_vm.py and Python orchestration/media tests. Guest unit owns
-guest-start.cmd/ps1, guest-install.ps1 (shared contract), install-gog.cmd/ps1,
-prepare-guest.cmd, guest-status.cmd and a dedicated guest-flow test module. Host stages
-all helpers on seed/game CDs; guest source allowlist must match host ISO verification.
-Coordinator owns README, docs/cleanup.md, implementation.md/state.md.
-
-Verification: full offline unittest suite, shell syntax, PowerShell parser/behavior checks
-where available, independent read-only review; runtime fresh-VM/UAC/Play/media detach checks
-remain separate. Existing working VM/saves stay preserved; installer crash remains failed.
-Roll back via scoped source changes and separate fresh VM home, not restoring unattended
-media over a partitioned disk. Audio experiment remains excluded from launcher defaults.
-
-### Fresh audio candidate (user-directed performance investigation)
-
-User explicitly requests a fresh VM with sound from first boot and no routine diagnostics.
-Candidate home: `~/Library/Application Support/FlatOut2VM-fresh-audio`; preserve all older
-VMs/saves/evidence. Add `setup --stage-only` so verified setup can return before registration
-or boot; reject this option for installed GPT homes and non-setup actions. Eligible blank
-retries must not register or boot in stage-only mode. Normal production audio audit remains
-unchanged. Tests prove no open/start on stage-only paths and account/disk preservation.
-
-Coordinator then configures only this stopped candidate for exactly one intel-hda controller,
-DebugLog false, and deferred verified game CD. Keep CoreAudio preference 2 and local-only UTM
-launch, check all other isolation fields against audited configuration. Windows first boots
-with sound; check desktop/playback responsiveness and no recording endpoint before graphics
-and game. Install only pinned signed graphics package, never sharing-capable guest tools.
-Keep source/license prompts in the actual launcher. New helpers remain subject to independent
-review and Windows runtime checks; no claim that fresh sound is a proven fix.
-
-Use the existing offline suite and `git diff --check`, then run the local user-facing launcher.
-Verify installation and Play without host control permissions. Keep the previous working VM
-and installation disk intact. Avoid starting multiple 8 GiB guests simultaneously. Preserve
-failure logs; do not delete unrelated or source-drive data. Push remains prohibited until the
-user explicitly approves it.
+Current findings and authorized publication/permanent-cleanup work are tracked only in
+[state.md](state.md). Detailed superseded plans and investigation history remain at git `57e009c`.

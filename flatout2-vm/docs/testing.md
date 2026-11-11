@@ -16,7 +16,10 @@ deferred. Audio stays disabled; use NoSound for gameplay.
 - Accelerated graphics provisioning is not automated. Installation/UX can be assessed without
   it, but gameplay stays blocked until a reviewed graphics-only path is supplied.
 - Offline tests mock Windows ACLs, tokens, COM, and native save archival. They do not establish
-  Windows PowerShell 5.1 runtime correctness.
+  Windows PowerShell 5.1 runtime correctness, including new stage/exception diagnostics.
+- Initial automatic elevation cancellation is unexplained. A later repair refused an
+  Everyone-writable game root. A working manual experimental shortcut is not shipped launch
+  behavior, a successful installation, or a substitute for these checks.
 - A previous host developed window-move/resize lag that persisted after UTM exited. Cause
   remains unknown. Stop and report host responsiveness problems; do not restart WindowServer.
 
@@ -27,8 +30,7 @@ deferred. Audio stays disabled; use NoSound for gameplay.
    an unpublished checkout is a candidate test only.
 2. Follow the [prerequisites](../README.md#prerequisites). Record Mac model, macOS version,
    UTM version, RAM, free disk space, and connected displays.
-3. Keep both purchased files together on the flash drive:
-   `setup_flatout_2_1.0_(26697).exe` and `setup_flatout_2_1.0_(26697)-1.bin`.
+3. Keep the [supported EXE/BIN pair](../README.md#prerequisites) together on the flash drive.
    Check that source files and unrelated drive content remain unchanged after testing.
 4. In Terminal, enter the checkout's `flatout2-vm` directory. Use this distinct home on every
    command. If it already exists, choose another path; do not delete prior attempts.
@@ -74,6 +76,8 @@ command does not prove successful guest installation.
    executable hash, then Retry. Verify original save bytes survive in the reported archive and
    are readable as Player. Also test failure after archival. Restore unelevated with the game
    closed; do not use personal saves. Native handle/ACL behavior needs real Windows evidence.
+   Verify writable/untrusted game roots and reparse points are refused without ownership/ACL
+   takeover, while the narrowly permitted writable Savegame archive preserves exact bytes.
 10. **Media cleanup:** After success and normal shutdown, run:
 
     ```sh
@@ -89,11 +93,12 @@ command does not prove successful guest installation.
 ## Report back
 
 Provide revision, environment, checklist results, exact error/exit code, and host responsiveness.
-Installer evidence is under `C:\ProgramData\FlatOut2VM\install-<run-id>`; on-demand diagnostics
-are under `%LOCALAPPDATA%\FlatOut2VM`. Do not publish credentials, unattended answer files,
+For a new test, installer reports are under `C:\ProgramData\FlatOut2VM\install-<run-id>`;
+on-demand diagnostics are under `%LOCALAPPDATA%\FlatOut2VM`. Do not publish credentials, unattended answer files,
 purchased installers, full VM bundles, or unreviewed private logs.
 Keep Windows crash dumps private: they can contain purchased installer data and process memory.
 Share only reviewed, sanitized fault-module and stack findings, not the dumps themselves.
 
 Offline tests alone do not accept the flash-drive flow. Failed installation or blocked gameplay
-must remain explicit. Publication and deletion of existing VMs require separate approval.
+must remain explicit. The [current state](state.md) owns existing publication/cleanup approvals
+and their verified outcomes; this checklist authorizes no additional deletion or publication.
