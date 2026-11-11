@@ -6,29 +6,26 @@ credentials, Windows media, or game installers.
 
 ## Current status
 
-Implemented: generation of a dedicated Windows 11 ARM UTM bundle, sparse 80 GiB guest disk,
-read-only installation media, unattended Windows answer file, separate administrator and
-player accounts, configuration audit, and guest-side GOG offline installation helper.
+The scripts generate a dedicated Windows 11 ARM UTM bundle with a sparse 80 GiB disk,
+read-only media, unattended setup, VMAdmin and Player accounts, configuration audit, and
+guest-side GOG offline installation helper.
 
 **Current delivery scope: installation from a flash drive containing the supported GOG
 offline installer.** Selecting its folder explicitly is also supported. Authenticated GOG,
 Steam, LAN, and reliable audio are deferred. For testing on another Mac, follow the
 [second-machine acceptance checklist](docs/testing.md).
 
-Observed locally on UTM 5.0.8: unattended installation to the Windows sign-in screen,
-automatic NetKVM installation, outbound networking, intended privacy registry values,
-Player desktop after sign-in, and a normal reboot with networking preserved.
-The separate experimental graphics VM passed a 32-bit Direct3D 9 rendering probe. With
-FlatOut 2 configured to **NoSound**, the user confirmed racing and saves work. Sound, LAN,
-cross-reboot save persistence, and a repeatable fresh installation remain unverified.
+**E2E remains blocked:** the GOG installer exits `0xC000041D` after writing files, initial
+automatic elevation cancellation is unexplained, and graphics provisioning is not automated.
+The helper correctly treats the crash as failure. A later repair also refused an Everyone-writable
+game root. Do not bypass these guards or treat existing files as a successful installation.
 
-The new first-login dispatcher, administrator Player account, receipt-gated launch, and repair
-flow pass offline tests but still need fresh Windows runtime acceptance. Experimental graphics
-remains excluded from automated defaults. In the earlier USB test the GOG installer exited
-with `0xC000041D` after writing game files; the helper correctly reports failure. Do not treat
-those files as a successful installation. An audio experiment also produced severe lag;
-audio remains disabled in the supported launcher. Local validation is not a
-published-repository E2E pass or proof of isolation.
+Local tests reached Windows/Player with networking and privacy settings applied. User-confirmed
+racing/saves used experimental graphics and **NoSound**; launch after restart used an explicitly
+approved manual experimental shortcut, not a shipped feature or successful receipt. Audio failed
+performance testing. LAN and cross-reboot save persistence remain unverified. See
+[verified findings and remaining runtime checks](docs/state.md), including the latest offline
+test result and pending publication/cleanup. Static checks do not prove isolation or gameplay.
 
 ## Security boundary
 
@@ -94,7 +91,7 @@ establishes subsequent byte identity, not independent certification of the sourc
 ## Prepare the VM
 
 Finished playing for good? See [shutdown, media cleanup, and permanent VM removal](docs/cleanup.md).
-Removing the VM also removes its saves and Windows state; the guide explains backup first.
+Removing the VM also removes its saves and Windows state; back up first if you want to keep them.
 
 Run from this directory:
 
@@ -123,13 +120,9 @@ and the login helper attempts receipt-validated game launch. If Windows is alrea
 Play selects UTM and asks you to use the guest **FlatOut 2** shortcut; it does not remotely
 launch a second game process. Guest launches run unelevated as Player.
 
-The launcher prompts for Windows license acceptance before downloading or creating a VM.
-Fresh setup also asks you to select and confirm your supported GOG USB/folder installer before
-downloads. It stages a verified game CD before the first Windows boot. The new first-login
-install/launch path passes offline tests but still needs a fresh-VM runtime test; the known GOG
-installer crash remains unresolved. Keep its failure logs rather than assuming installed files
-mean a successful setup.
-Declining cancels setup. For unattended use, pass `--accept-windows-license` only after reading
+Source confirmation and Windows license acceptance precede downloads; verified game media is
+staged before first boot. Declining cancels setup. For unattended use, pass
+`--accept-windows-license` only after reading
 and accepting Microsoft's Windows license terms.
 The generic installation key selects Pro; it does not activate Windows or provide a license.
 
@@ -159,25 +152,16 @@ Setup also downloads and SHA256-verifies the [UTM guest tools 0.1.271 ISO](https
 (about 121 MiB, SHA256 `65b6a69b392ee01dd314c10f3dad9ebbf9c4160be43f5f0dd6bb715944d9095b`).
 This hash was computed from the official download, not independently published by its vendor.
 Only the Windows 11 ARM64 NetKVM package and its license are copied into our seed ISO.
-The tools ISO's answer file and installer are not attached or run. A synchronous command in
-the `specialize` pass locates our seed by `flatout2-seed.tag` and runs `pnputil /add-driver /install`
-before OOBE. No CD drive letter is assumed. Windows signature enforcement stays enabled.
-Results are written to `C:\Windows\Panther\flatout2-network.log`; missing media or a failed
-installation fails the command rather than silently continuing. A requested reboot is handed
-to Windows Setup. This path replaces WinPE configuration-set staging, which copied no drivers
-in the observed Windows 11 25H2 installation. The specialize path subsequently installed NetKVM
-successfully in the local Windows test, with exit code 0 and working outbound networking.
+The tools ISO's answer file and installer are not attached or run. Windows Setup installs NetKVM
+before OOBE with signature enforcement enabled; failures stop the command. The guest log is
+`C:\Windows\Panther\flatout2-network.log`.
 
 Before network installation, the same guest-only `specialize` step applies privacy policies:
 location, Find my device, advertising ID, online speech personalization, and tailored
 experiences are disabled; diagnostics are limited to required data on Windows 11 Pro.
-The tailored-experiences policy is seeded into the default user profile for new accounts.
-Only after those writes succeed is the privacy-choice screen suppressed with
-`DisablePrivacyExperience`. The answer file also sets `ProtectYourPC=3` to disable Express
-settings. Failures are logged to `C:\Windows\Panther\flatout2-privacy.log` and fail the setup
-command. This is not a zero-telemetry guarantee and does not disable Defender or updates.
-The privacy screen was skipped in the local test, and all seven policy values were checked
-after Player sign-in. These settings do not change existing VMs.
+Privacy choices are suppressed only after policy writes succeed. Failures stop the setup command
+and are logged to `C:\Windows\Panther\flatout2-privacy.log`. This is not a zero-telemetry
+guarantee and does not disable Defender or updates. These settings do not change existing VMs.
 
 The setup never recreates an existing guest disk. A retry refreshes seed media only when UTM
 reports the VM stopped and the first MiB of its raw guest disk is still zero-filled. Any
@@ -186,16 +170,12 @@ recovery check for this prototype, not a general disk-content classifier.
 For a separate attempt use `--home '/another/path'`
 on every command. Paths can contain spaces; no repository or username is hardcoded.
 
-UTM opens and starts the generated VM. macOS may ask for permission. Setup replaces the
-keypress-required EFI boot image in the VM-local ISO copy with Microsoft's bundled
-`efisys_noprompt.bin`. It checks both boot image SHA256 hashes and the default EFI catalog
-entry before writing, then reads back the replacement. The cached download stays unchanged.
-The system disk precedes both CDs in UTM's drive list, which determines QEMU boot priority.
-An empty disk should fall through to the no-prompt installer; subsequent restarts should boot
-the installed system. This boot/restart path reached sign-in in the local test. US English locale
-and a single US keyboard are configured for both Windows Setup and OOBE. Image selection,
-disk partitioning, and account creation are preconfigured. Current Windows builds may still
-show OOBE/license/account screens. Do not bypass security checks to suppress them.
+UTM opens and starts the generated VM. macOS may ask for permission. Setup verifies and replaces
+the VM-local ISO's keypress-required EFI image with Microsoft's bundled `efisys_noprompt.bin`;
+the cached download stays unchanged. Disk-first boot order permits installation on an empty disk
+and normal boot afterward. US English locale/keyboard, image selection, partitioning, and account
+creation are preconfigured. Windows may still show OOBE/license/account screens. Do not bypass
+security checks to suppress them.
 
 No UEFI shell script is required. If the VM remains at
 `Shell>`, that is a failed boot test, not a Windows or PowerShell script failure. Do not format
@@ -260,9 +240,9 @@ unattended media. The launcher refuses media changes while Windows is running.
    scripts still require signatures. The separate GOG installer signature check remains.
 5. Check the helper's result and logs under `C:\ProgramData\FlatOut2VM\install-<run-id>`.
    Failed runs retain their payload for diagnosis. Successful runs remove that payload and
-    create public Play, Retry, and diagnostic shortcuts. The unelevated parent launches the game
-    only after validating the successful result and receipt. A required restart defers launch
-    until a later Windows boot; no automatic reboot is requested. Launch as Player, not VMAdmin.
+   create public Play, Retry, and diagnostic shortcuts. The unelevated parent launches the game
+   only after validating the successful result and receipt. A required restart defers launch
+   until a later Windows boot; no automatic reboot is requested. Launch as Player, not VMAdmin.
 
 The host command cannot observe the guest result and does not claim installation success.
 Rerunning the helper skips payload staging/reinstallation only when the schema-2 receipt binds
@@ -295,8 +275,14 @@ virtual CD. See the [cleanup guide](docs/cleanup.md) for permanent VM removal an
 The launcher does not install the accelerated graphics driver. Microsoft Basic Display Driver
 is not a gameplay-ready result. A separate local test used the graphics-only signed
 [v0.5 ARM64X package](https://github.com/osy/kvm-guest-drivers-windows/releases/tag/v0.5),
-driver **100.6.101.58000**, and passed a 32-bit D3D9 probe plus racing with NoSound.
-Pinned package and runtime evidence are recorded in [verification state](docs/state.md).
+driver **100.6.101.58000**, and passed a 32-bit D3D9 probe plus user-confirmed racing with NoSound.
+The reviewed asset is
+[`viogpu3d-arm64x-signed.zip`](https://github.com/osy/kvm-guest-drivers-windows/releases/download/v0.5/viogpu3d-arm64x-signed.zip),
+2,133,662 bytes, SHA256 `155695ab7820f71e75c369aeae7b8c060691ba43646ac37edef72aa2428506d5`
+(release metadata matched the local download). It targets ARM64 VirtIO GPU DEV_1050, includes
+x86 user-mode DLLs via D3D9On12, and installs a LocalSystem resolution service, not a sharing
+agent. Its scheduler/preemption and TDR changes still require review for automated delivery.
+See [verification limits](docs/state.md).
 
 Do not install the complete guest-tools suite: sharing agents are outside this flow's isolation
 contract. Until graphics-only provisioning has a reviewed delivery path, the second-machine
@@ -308,6 +294,10 @@ Preserve a stopped VM copy before graphics experiments. Do not rely on suspend s
 UTM refused saved-state suspension with the accelerated display device in the local test.
 
 ## LAN on normal Wi-Fi (deferred, not part of flash-drive acceptance)
+
+Production uses **Shared** networking. A local `en0` bridging experiment did not verify LAN
+play. The following is an optional manual test, not accepted setup behavior, and reduces host/LAN
+isolation:
 
 1. Shut down the VM. In its UTM network settings choose **Bridged**, selecting the physical
    Wi-Fi/Ethernet interface, not a VPN. Keep folder, clipboard, and USB sharing disabled.

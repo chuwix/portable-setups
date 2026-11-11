@@ -5,7 +5,7 @@ your personal machine configuration. Projects do not require Nix.
 
 | Project | Platform | Status |
 | --- | --- | --- |
-| [FlatOut 2 VM](flatout2-vm/) | Apple Silicon macOS, UTM | Flash-drive install test candidate; fresh E2E pending |
+| [FlatOut 2 VM](flatout2-vm/) | Apple Silicon macOS, UTM | Experimental flash-drive installer; E2E blocked |
 
 ## Use a project
 
@@ -18,7 +18,8 @@ one-click setup. Check the project's status before using it.
 
 ### Test the FlatOut 2 prototype
 
-The experimental test candidate is available on `main`.
+Experimental source is available on `main`; check the project's
+[current verification state](flatout2-vm/docs/state.md) for pending follow-up publication.
 On an Apple Silicon Mac with Terminal, Homebrew, and Git available:
 
 ```sh

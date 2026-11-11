@@ -41,6 +41,12 @@ from detaching the virtual game CD. Source installers are yours to keep.
 If you might return, make a backup before removing anything. This is not required after each
 play session.
 
+If you deliberately choose **permanent removal without backups**, all saves, Windows state,
+repair archives, and runtime evidence will be lost. Skip backup creation only with that explicit
+decision. Do not describe removed logs, screenshots, or VM copies as available evidence afterward;
+retain only reviewed, sanitized findings. The project's current cleanup authorization and verified
+completion status belong in [state.md](state.md), not this general procedure.
+
 1. Save, exit the game, and shut down Windows normally. Wait for UTM to show it as stopped.
 2. Identify the exact VM you created. In UTM, use its action menu to reveal the VM in Finder
    and verify the path. Do not identify it by name alone if several VMs have the same name.
@@ -56,11 +62,12 @@ play session.
    or use UTM's export action for the complete VM and separately preserve the home-side files
    you need. A configuration-only copy does not contain Windows or saves. Keep backups private:
    the VM and its home-side `credentials.json` contain account data. Verify the complete backup
-   exists before continuing. Keep a full VM backup if you want a self-contained way to restore
+   exists before continuing, unless you explicitly chose no-backup permanent removal above.
+   Keep a full VM backup if you want a self-contained way to restore
    saves without enabling host folder sharing.
 4. Remove the selected VM from UTM using its action menu. Read the confirmation carefully:
    depending on where the VM is stored, UTM can remove its data as well as its list entry.
-   Do not choose this until any wanted backup is complete.
+   Do not choose this until any wanted backup is complete or you have explicitly accepted its loss.
 5. In Finder, inspect the **exact VM home you verified**, then move remaining setup-owned files
    to the Trash. These include the VM bundle if UTM left it behind, `seed`, `credentials.json`,
    `vm-id`, and any installer-media or diagnostic backups inside that home. Preserve any unrelated
@@ -72,7 +79,7 @@ play session.
    ```
 
    If you supplied `--cache`, inspect that location instead. Keep the cache if another FlatOut 2
-  VM setup will reuse it. Do not remove other `portable-setups` caches or purchased installers.
+   VM setup will reuse it. Do not remove other `portable-setups` caches or purchased installers.
 7. Check that UTM no longer lists the removed VM and that no wanted files are in the Trash.
    Empty the Trash only when you are certain you no longer need them. Backups retained elsewhere
    still occupy space; keep or remove those separately.

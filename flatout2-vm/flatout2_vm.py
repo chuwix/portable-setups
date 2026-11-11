@@ -15,6 +15,7 @@ import subprocess
 import sys
 import struct
 import tempfile
+import time
 import uuid
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -389,6 +390,20 @@ def retry_status(vm_id: str) -> str | None:
         return None
 
 
+def open_registered_vm(bundle: Path, vm_id: str) -> str:
+    """Wait for asynchronous bundle registration, without retrying other errors."""
+    run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
+    for attempt in range(61):
+        status = retry_status(utm_id(vm_id))
+        if status is not None:
+            return status
+        if attempt < 60:
+            time.sleep(0.5)
+    raise ValueError(f"UTM did not register the prepared VM within 30 seconds: {bundle}. "
+                     "The prepared home and media are preserved. Check UTM for dialogs, "
+                     "open this bundle, and retry using the same --home; do not delete it.")
+
+
 def refresh_seed(destination: Path, source_dir: Path | None = None, stage_only: bool = False) -> None:
     """Refresh installer media only for a stopped VM whose disk is unpartitioned."""
     bundle = destination / f"{NAME}.utm"
@@ -417,8 +432,7 @@ def refresh_seed(destination: Path, source_dir: Path | None = None, stage_only: 
         # Only audited, still-blank retry state is eligible for this recovery.
         if config_path.read_bytes() != original:
             raise ValueError("Configuration changed before retry registration; refusing to open the VM.")
-        run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
-        if run([str(UTM / "Contents/MacOS/utmctl"), "status", vm_id]) != "stopped":
+        if open_registered_vm(bundle, vm_id) != "stopped":
             raise ValueError("Retry VM was not registered and stopped. Check UTM, shut down Windows normally, then retry setup.")
         with (data / "system.raw").open("rb") as disk:
             registered_header = disk.read(1024 * 1024)
@@ -475,7 +489,8 @@ def write_seed(seed: Path, data: Path) -> None:
 
 
 def start_setup_vm(bundle: Path, vm_id: str) -> None:
-    run(["/usr/bin/open", "-a", str(UTM), str(bundle)])
+    if open_registered_vm(bundle, vm_id) != "stopped":
+        raise ValueError("Setup VM must be registered and stopped before starting; check UTM.")
     run([str(UTM / "Contents/MacOS/utmctl"), "start", utm_id(vm_id)])
     print("VM started. Windows Setup should boot without a keypress; a Shell> prompt is a failed boot test.")
 
